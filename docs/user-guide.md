@@ -1,20 +1,24 @@
-# Planer postów LinkedIn w Claude Desktop – przewodnik użytkownika
+# Planer postów LinkedIn – przewodnik użytkownika
 
-Ten dokument opisuje, jak wygląda codzienna praca z planerem i co trzeba zrobić raz, żeby wszystko działało. Szczegóły techniczne są w [README](../README.md), a specyfikacja narzędzi w [mcp-tools-contract.md](mcp-tools-contract.md).
+> **Stan dokumentu:** opisuje wersję docelową, w której aplikacja działa w Azure i jest podłączona do Claude jako konektor MCP (etap 6, w przygotowaniu). Obecnie działa wersja lokalna (worker na komputerze), używana do testów. Opisuje ją [README](../README.md).
+
+Ten dokument opisuje, jak wygląda codzienna praca z planerem i co trzeba zrobić raz, żeby wszystko działało. Specyfikacja narzędzi jest w [mcp-tools-contract.md](mcp-tools-contract.md).
 
 ---
 
 ## 1. Jak to działa
 
-Posty piszesz i planujesz w rozmowie z Claude Desktop. Claude pokazuje podgląd, a Ty go zatwierdzasz. Od tej chwili resztą zajmuje się program działający w tle na Twoim komputerze (**worker**):
+Posty piszesz i planujesz w rozmowie z Claude Desktop. Claude pokazuje podgląd, a Ty go zatwierdzasz. Zatwierdzona seria trafia do **aplikacji w Azure**, która działa całą dobę:
 
 1. o zaplanowanej godzinie publikuje post na Twoim profilu LinkedIn;
-2. po kilku minutach dodaje pod nim Twój komentarz, np. z linkiem.
+2. po kilku minutach dodaje pod nim Twój komentarz.
 
 ```
-Ty ──rozmowa──> Claude Desktop ──> serwer „linkedin” ──> worker w tle ──o 8:00──> LinkedIn
-                  (podgląd,                               (kolejka,          (post, potem
-                   zatwierdzenie)                          harmonogram)       komentarz)
+Claude Desktop ──konektor MCP (HTTPS)──> aplikacja w Azure ──o 8:00──> LinkedIn
+ (rozmowa, podgląd,                       ├─ harmonogram (co 5 min)     (post, potem
+  zatwierdzenie)                          ├─ baza PostgreSQL             komentarz)
+                                          ├─ zdjęcia
+                                          └─ zaszyfrowany token LinkedIn
 ```
 
 **Nic nie jest publikowane od razu.** Każdy post ma termin co najmniej 5 minut w przód i zawsze przechodzi przez podgląd oraz Twoje zatwierdzenie.
@@ -23,109 +27,59 @@ Ty ──rozmowa──> Claude Desktop ──> serwer „linkedin” ──> wor
 
 | | |
 |---|---|
-| **Gdzie widać zaplanowane posty** | W Claude Desktop („pokaż kolejkę”) albo komendą `npm run status`. **Nie** w zakładce „Zaplanowane posty” na LinkedIn, bo API LinkedIn nie pozwala tam dodawać postów. Planer trzyma kolejkę u siebie i publikuje w wyznaczonej chwili, tak jak Buffer czy Hootsuite. |
-| **Komputer** | Musi być włączony i zalogowany w chwili publikacji, bo worker działa lokalnie. |
+| **Komputer** | Potrzebny tylko do rozmowy z Claude. **O godzinie publikacji może być wyłączony**, bo publikuje Azure. |
+| **Gdzie widać zaplanowane posty** | W Claude („pokaż kolejkę”). **Nie** w zakładce „Zaplanowane posty” na LinkedIn, bo API LinkedIn nie pozwala tam dodawać postów. Planer trzyma kolejkę u siebie i publikuje w wyznaczonej chwili, tak jak Buffer czy Hootsuite. |
 | **Dokładność godziny** | Harmonogram sprawdza kolejkę co 5 minut (:00, :05, :10…). Termin 8:00 oznacza publikację o 8:00, a termin 8:02 publikację o 8:05, o czym podgląd uprzedza. |
-| **Zdjęcia** | Jedno zdjęcie na post (JPG, PNG albo GIF). Trzeba podać **ścieżkę do pliku** na dysku. Obrazka wklejonego do czatu Claude nie może przekazać. |
-| **Skąd planować** | Tylko z Claude Desktop na tym komputerze (nie z telefonu ani z claude.ai w przeglądarce). |
-| **Logowanie do LinkedIn** | Ważne 60 dni, potem jedno kliknięcie, żeby je odnowić (patrz punkt 5). |
+| **Zdjęcia** | Jedno zdjęcie na post (JPG, PNG albo GIF), wysyłane przez **jednorazowy link**, który podaje Claude (punkt 3). Samego obrazka wklejonego do czatu Claude nie może przekazać aplikacji. |
+| **Logowanie** | Jedno logowanie przez LinkedIn łączy konektor z Twoim kontem i daje aplikacji prawo publikowania. Dostęp ma tylko Twoje konto. Logowanie jest ważne 60 dni. |
+| **Skąd planować** | Z Claude Desktop. Ten sam konektor zadziała też na claude.ai i w aplikacji Claude na telefonie, jeśli kiedyś zechcesz. |
 
 ---
 
 ## 2. Jednorazowa konfiguracja
 
-Każdy krok robisz tylko raz. Na końcu każdego jest sposób sprawdzenia, że się udał.
+### Krok 1. Aplikacja w LinkedIn Developer Portal
 
-### Krok 1. Program na komputerze
+Na [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps), w aplikacji, której używasz:
 
-Potrzebny jest Node.js 22 lub nowszy (`node -v`). W PowerShell:
-
-```powershell
-cd C:\Users\SzymonWarda\Documents\Projekt-mcp\LinkedIn-mcp
-npm install
-npm run build
-```
-
-✅ Sprawdzenie: `npm run doctor` wyświetla konfigurację bez błędów.
-
-### Krok 2. Aplikacja w LinkedIn Developer Portal
-
-Na [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps) utwórz aplikację albo wybierz istniejącą. LinkedIn wymaga powiązania aplikacji ze stroną firmy, ale posty i tak pójdą z Twojego profilu osobistego.
-
-1. Zakładka **Products**: dodaj
+1. zakładka **Products** musi mieć:
    - **Sign In with LinkedIn using OpenID Connect**,
-   - **Share on LinkedIn**.
-2. Zakładka **Auth → Authorized redirect URLs**: dodaj dokładnie
-   `http://127.0.0.1:47811/oauth/callback`
-3. Z zakładki **Auth** skopiuj **Client ID** i **Client Secret**.
+   - **Share on LinkedIn**;
+2. zakładka **Auth → Authorized redirect URLs**: dodaj adres aplikacji w Azure, np.
+   `https://linkedin-mcp.<region>.azurecontainerapps.io/oauth/callback`
+   Dokładny adres pojawi się po wdrożeniu w kroku 2.
 
-### Krok 3. Plik `.env`
+### Krok 2. Wdrożenie w Azure
 
-```powershell
-copy .env.example .env
-notepad .env
-```
+Robi się to raz, według instrukcji w README (etap 6). Powstają:
 
-Uzupełnij:
+| Zasób | Po co |
+|---|---|
+| **Azure Container Apps** (1 stale działająca instancja) | aplikacja i harmonogram, adres HTTPS |
+| **Azure Database for PostgreSQL** | kolejka postów, historia, zdjęcia, zaszyfrowany token |
+| **Key Vault** | Client Secret LinkedIn i klucz szyfrowania |
+| **Monitoring** (Azure Monitor) | dziennik i alerty e-mail o błędach publikacji oraz wygasającym logowaniu |
 
-```
-LINKEDIN_CLIENT_ID=…            (z Developer Portal)
-LINKEDIN_CLIENT_SECRET=…        (z Developer Portal – nikomu go nie pokazuj)
-LINKEDIN_MODE=mock              (na razie atrapa; w kroku 7 zmienisz na live)
-LINKEDIN_POST_VISIBILITY=PUBLIC (albo CONNECTIONS – tylko kontakty 1. stopnia)
-```
+Przy wdrożeniu ustawiasz Client ID i Client Secret z kroku 1, strefę czasową (domyślnie Europe/Warsaw) i tryb: najpierw `mock` (atrapa), potem `live`.
 
-Plik `.env` nie trafia do repozytorium. Sekretów nie wklejaj do czatu.
+✅ Sprawdzenie: adres `https://…/api/health` w przeglądarce odpowiada `"ok": true`.
 
-### Krok 4. Worker w tle i autostart
+### Krok 3. Dodanie konektora w Claude Desktop
 
-```powershell
-npm run worker:start          # uruchom teraz
-npm run autostart:install     # uruchamiaj sam po każdym zalogowaniu do Windows
-```
+1. **Settings → Connectors → Add custom connector**.
+2. Nazwa: np. `LinkedIn`. Adres: `https://linkedin-mcp.<region>.azurecontainerapps.io/mcp`.
+3. **Add**, potem **Connect**. Otworzy się logowanie LinkedIn: zaloguj się i kliknij **Allow**.
+4. Wróć do Claude. Konektor ma status „połączony”.
 
-✅ Sprawdzenie: `npm run worker:status` pokazuje `"running": true`.
+✅ Sprawdzenie: w nowej rozmowie **+ → Connectors** pokazuje konektor LinkedIn jako włączony. Na polecenie „Sprawdź status LinkedIn” Claude odpowiada z Twoim profilem i datą ważności logowania.
 
-### Krok 5. Podłączenie do Claude Desktop
+Jeśli wcześniej był podłączony lokalny serwer `linkedin` (wersja testowa), usuń go z konfiguracji Claude Desktop, żeby nie mieć dwóch podobnych narzędzi.
 
-```powershell
-npm run claude-config -- --write
-```
+### Krok 4. Test w trybie atrapy, potem przełączenie na prawdziwe LinkedIn
 
-Komenda dopisuje serwer `linkedin` do konfiguracji Claude Desktop i robi kopię zapasową. Następnie **zamknij Claude Desktop całkowicie**: prawy przycisk na ikonie w zasobniku przy zegarze → **Quit**. Potem uruchom go ponownie.
-
-✅ Sprawdzenie:
-- **Settings → Developer** pokazuje `linkedin` ze statusem *running*;
-- w nowej rozmowie **+ → Connectors** pokazuje `linkedin` jako włączony.
-
-Nie używaj okna „Add custom connector”, bo służy do serwerów w internecie, a ten serwer jest lokalny.
-
-### Krok 6. Logowanie do LinkedIn
-
-Otwórz w przeglądarce **http://127.0.0.1:47811/oauth/start**, zaloguj się na LinkedIn i kliknij **Allow**.
-
-✅ Sprawdzenie: strona pokazuje Twoje imię i nazwisko, datę ważności logowania i uprawnienia (`w_member_social`). Później stan sprawdzisz przez `npm run token:status`.
-
-### Krok 7. Włączenie prawdziwej publikacji
-
-Do tej chwili wszystko działa w **trybie atrapy**: przechodzi cały proces, ale nic nie trafia na LinkedIn. Gdy chcesz publikować naprawdę:
-
-1. w `.env` zmień `LINKEDIN_MODE=mock` na `LINKEDIN_MODE=live`;
-2. `npm run worker:restart`.
-
-✅ Sprawdzenie: w Claude Desktop napisz „Sprawdź status LinkedIn”. Odpowiedź powinna zawierać `mode: live`, `connected: true` i Twój profil.
-
-Posty zatwierdzone jeszcze w trybie atrapy **nie zostaną** opublikowane po przełączeniu. Dostaną status `failed` z kodem `mode_mismatch`. Zaplanuj je ponownie, jeśli mają się ukazać.
-
-### Krok 8. Post testowy
-
-Zaplanuj jeden krótki post za około 10 minut, z komentarzem po 1–2 minutach. Sprawdź na LinkedIn, czy post i komentarz się pojawiły. Post testowy usuniesz komendą:
-
-```powershell
-npm run cli -- linkedin delete-post <id-posta> --yes
-```
-
-Identyfikator posta zobaczysz w kolejce.
+1. W trybie `mock` zaplanuj próbną serię i sprawdź kolejkę oraz „publikację” (nic nie trafia na LinkedIn).
+2. Przełącz aplikację na `live` według instrukcji w README. Posty zatwierdzone w trybie atrapy **nie zostaną** opublikowane: dostaną status `failed` z kodem `mode_mismatch`.
+3. Zaplanuj jeden krótki post testowy za około 10 minut, z komentarzem po 1–2 minutach. Sprawdź go na LinkedIn, a potem możesz poprosić Claude'a o usunięcie posta testowego z LinkedIn.
 
 Po pierwszym komentarzu `can_comment` w statusie zmieni się z `unknown` na `yes` albo `no`. Wartość `no` oznacza, że aplikacja nie ma prawa komentować; komentarze będą wtedy pomijane, a posty nadal będą wychodzić.
 
@@ -133,15 +87,18 @@ Po pierwszym komentarzu `can_comment` w statusie zmieni się z `unknown` na `yes
 
 ## 3. Codzienna praca
 
-Wszystko robisz w rozmowie z Claude Desktop, zwykłym językiem. Przykłady:
+Wszystko robisz w rozmowie z Claude, zwykłym językiem.
 
 **Seria postów**
 > Przygotuj serię 3 postów o NIS2 na poniedziałek, środę i piątek o 8:00. Pod każdym komentarz z zaproszeniem na webinar. Pokaż podgląd.
 
 **Post ze zdjęciem**
-> Zaplanuj post »…« na czwartek 9:00 ze zdjęciem "C:\Users\SzymonWarda\Pictures\nis2.png", tekst alternatywny: »Schemat obowiązków NIS2«.
+> Zaplanuj post »…« na czwartek 9:00 ze zdjęciem. Tekst alternatywny: »Schemat obowiązków NIS2«.
 
-Ścieżkę skopiujesz w Eksploratorze: Shift + prawy przycisk na pliku → **Kopiuj jako ścieżkę**.
+1. Claude podaje **link do przesłania zdjęcia**, ważny 15 minut.
+2. Klikasz go. Otwiera się strona z przyciskiem **Wybierz zdjęcie**: wybierasz plik z dysku (albo z galerii i aparatu na telefonie) i wysyłasz.
+3. Strona pokazuje miniaturkę i „gotowe”. Piszesz Claude'owi „wysłane”.
+4. Claude robi podgląd posta z tym zdjęciem.
 
 **Link, który będzie później**
 > Komentarz ma zawierać link do nagrania, które wrzucę później. Jeśli go nie podam, dodaj komentarz bez linku: »Nagranie wkrótce na profilu«.
@@ -150,14 +107,14 @@ Kiedy link będzie gotowy:
 > Link do komentarza pod postem z czwartku: https://…
 
 **Zmiany i kontrola**
-> Pokaż kolejkę. · Przesuń środowy post na 10:30. · Zmień treść piątkowego posta na … · Anuluj post z czwartku. · Pokaż szczegóły i historię posta z poniedziałku.
+> Pokaż kolejkę. · Przesuń środowy post na 10:30. · Zmień treść piątkowego posta na … · Zmień zdjęcie w poście z czwartku. · Anuluj post z czwartku. · Pokaż szczegóły i historię posta z poniedziałku.
 
 ### Jak wygląda zatwierdzanie
 
 1. Claude wywołuje **podgląd**. Nic jeszcze nie jest zapisane.
 2. Widzisz dla każdego posta:
    - godzinę publikacji (także faktyczną, jeśli wypada między przebiegami);
-   - liczbę znaków, komentarz i zdjęcie;
+   - liczbę znaków, komentarz i zdjęcie (nazwa, rozmiar, wymiary);
    - **ostrzeżenia**, np. kolizja terminów, godzina przy zmianie czasu, brak tekstu alternatywnego;
    - **błędy**, np. termin za wcześnie, za długi post, duplikat.
 3. Jeśli wszystko się zgadza, piszesz „zatwierdzam”. Claude zapisuje do kolejki **dokładnie** to, co widziałeś w podglądzie.
@@ -171,9 +128,9 @@ Zmienić lub anulować post możesz do 5 minut przed publikacją.
 
 | Kiedy | Co się dzieje | Status w kolejce |
 |---|---|---|
-| Po zatwierdzeniu | post czeka w kolejce | `scheduled` |
-| O godzinie publikacji (najbliższy przebieg co 5 min) | worker wysyła post (i zdjęcie) na LinkedIn | `publishing` → `published` + link do posta |
-| Po opóźnieniu komentarza (domyślnie 10 min) | worker dodaje komentarz | komentarz: `waiting` → `done` |
+| Po zatwierdzeniu | post czeka w kolejce w Azure | `scheduled` |
+| O godzinie publikacji (najbliższy przebieg co 5 min) | aplikacja wysyła post (i zdjęcie) na LinkedIn | `publishing` → `published` + link do posta |
+| Po opóźnieniu komentarza (domyślnie 10 min) | aplikacja dodaje komentarz | komentarz: `waiting` → `done` |
 
 Treść wychodzi dokładnie tak, jak w podglądzie, łącznie z nawiasami, gwiazdkami, polskimi znakami i emoji. Hashtagi `#słowo` są klikalne. Znak `@` jest zwykłym tekstem, więc wzmianki osób nie są tworzone.
 
@@ -183,64 +140,47 @@ Treść wychodzi dokładnie tak, jak w podglądzie, łącznie z nawiasami, gwiaz
 
 | Sytuacja | Co zobaczysz | Co zrobić |
 |---|---|---|
-| **Komputer był wyłączony w chwili publikacji** | Post spóźniony mniej niż 60 min wychodzi zaraz po starcie. Bardziej spóźniony ma status `missed`. | Poproś Claude'a o nowy termin dla tego posta (wraca wtedy do kolejki) albo go anuluj. |
-| **Publikacja się nie udała, błąd jednoznaczny** (np. odmowa, brak połączenia) | status `failed`, opis w `last_error` | Post na pewno nie powstał. Zaplanuj go ponownie. |
-| **Publikacja niepewna** (`ambiguous: true`, np. brak odpowiedzi LinkedIn po wysłaniu) | status `failed` z informacją „nie wiadomo, czy post powstał” | **Sprawdź swój profil na LinkedIn.** Planer celowo nie ponawia publikacji, żeby post nie ukazał się dwa razy. |
+| **Publikacja się nie udała, błąd jednoznaczny** (np. odmowa LinkedIn) | status `failed`, opis w `last_error`, alert e-mail | Post na pewno nie powstał. Zaplanuj go ponownie. |
+| **Publikacja niepewna** (`ambiguous: true`, np. brak odpowiedzi LinkedIn po wysłaniu) | status `failed` z informacją „nie wiadomo, czy post powstał”, alert e-mail | **Sprawdź swój profil na LinkedIn.** Aplikacja celowo nie ponawia publikacji, żeby post nie ukazał się dwa razy. |
+| **Aplikacja w Azure nie działała w terminie** (np. awaria, restart) | spóźnienie poniżej 60 min: post wychodzi po wznowieniu; powyżej: status `missed` | Poproś Claude'a o nowy termin dla tego posta albo go anuluj. |
 | **Brak uprawnień do komentarzy** | komentarz `skipped`, `can_comment: no` | Posty dalej wychodzą, tylko bez komentarza. Komentarz dodasz ręcznie. |
 | **Link nie został podany na czas** | komentarz wychodzi w wersji bez linku albo jest pomijany | tak, jak ustaliłeś przy planowaniu |
-| **Chcesz natychmiast wstrzymać wszystko** | – | `npm run pause -- "powód"`. Nic nie zostanie opublikowane do `npm run resume`. |
-| **Logowanie LinkedIn wygasa (co 60 dni)** | Tydzień wcześniej status pokazuje ostrzeżenie „wygasa za N dni”. | Otwórz ponownie http://127.0.0.1:47811/oauth/start. Jeśli jesteś zalogowany na LinkedIn w przeglądarce, zajmie to kilka sekund. |
-| **Claude mówi, że worker nie działa** | błąd `worker_not_running` z komendą | `npm run worker:start` |
+| **Chcesz natychmiast wstrzymać publikację** | – | Napisz Claude'owi „wstrzymaj publikację”. Nic nie wyjdzie do polecenia „wznów publikację”. |
+| **Logowanie LinkedIn wygasa (co 60 dni)** | Tydzień wcześniej status i alert e-mail „wygasa za N dni”. | W Claude Desktop: **Settings → Connectors → LinkedIn → Connect** (ponowne logowanie). Kolejka zostaje nietknięta. |
+| **Link do zdjęcia wygasł** | strona „link wygasł” | Poproś Claude'a o nowy link. |
 
 ---
 
 ## 6. Regularne czynności
 
-- **Raz na około 2 miesiące:** odnowienie logowania LinkedIn (punkt 5).
+- **Raz na około 2 miesiące:** ponowne połączenie konektora (punkt 5).
 - **Po planowaniu większej serii:** „pokaż kolejkę”, żeby sprawdzić godziny.
-- **Czasem:** `npm run status` pokazuje wszystko naraz: worker, autostart, pauzę, najbliższe posty i posty wymagające uwagi.
-- **Po zmianie `.env`:** `npm run worker:restart`.
-- **Po aktualizacji programu:** `npm run build`, `npm run worker:restart` i ponowne uruchomienie Claude Desktop.
+- **Gdy przyjdzie alert e-mail:** „pokaż posty wymagające uwagi” (statusy `failed` i `missed`).
 
 ---
 
-## 7. Ściąga komend
+## 7. Najczęstsze pytania
 
-Uruchamiaj w PowerShell w folderze `C:\Users\SzymonWarda\Documents\Projekt-mcp\LinkedIn-mcp`.
-
-| Komenda | Do czego |
-|---|---|
-| `npm run status` | pełny stan |
-| `npm run worker:start` / `worker:stop` / `worker:restart` / `worker:status` | worker w tle |
-| `npm run worker:logs` | ostatnie wpisy dziennika |
-| `npm run autostart:install` / `autostart:uninstall` | start razem z Windows |
-| `npm run pause -- "powód"` / `npm run resume` | bezpiecznik |
-| `npm run token:status` | stan logowania LinkedIn (bez pokazywania tokenu) |
-| `npm run login` | adres strony logowania |
-| `npm run cli -- linkedin delete-post <id> --yes` | usunięcie opublikowanego posta z LinkedIn |
-| `npm run cli -- token clear` | wylogowanie (usunięcie tokenu z komputera) |
-
----
-
-## 8. Najczęstsze pytania
+**Czy komputer musi być włączony o godzinie publikacji?**
+Nie. Publikuje aplikacja w Azure. Komputer jest potrzebny tylko do rozmowy z Claude.
 
 **Czy mogę zobaczyć zaplanowane posty w LinkedIn?**
-Nie. API LinkedIn pozwala tylko opublikować post od razu, a nie dodać go do harmonogramu LinkedIn. Kolejkę widzisz w Claude Desktop.
+Nie. API LinkedIn pozwala tylko opublikować post od razu, a nie dodać go do harmonogramu LinkedIn. Kolejkę widzisz w Claude.
 
-**Czy mogę planować z telefonu?**
-Nie w tej wersji. Wymagałoby to serwera w chmurze (np. Azure) z własnym logowaniem. Ten wariant został rozważony i na razie odłożony.
+**Dlaczego zdjęcie wysyłam przez link, a nie wklejam do czatu?**
+Claude widzi wklejony obraz, ale nie może przekazać pliku do konektora. Link otwiera stronę aplikacji, na którą wysyłasz plik bezpośrednio. Link jest jednorazowy i ważny 15 minut, więc nikt obcy nic przez niego nie prześle.
 
-**Czy mogę wkleić zdjęcie do czatu?**
-Claude je zobaczy i może pomóc w treści posta, ale nie przekaże pliku planerowi. Podaj ścieżkę do pliku na dysku.
+**Co jeśli po zatwierdzeniu zmienię albo usunę plik zdjęcia na dysku?**
+Nic się nie stanie. Aplikacja ma własną kopię i opublikuje dokładnie to zdjęcie, które zatwierdziłeś.
 
-**Co jeśli zmienię albo usunę plik zdjęcia po zatwierdzeniu?**
-Nic się nie stanie. Planer zrobił kopię przy podglądzie i opublikuje dokładnie to zdjęcie, które zatwierdziłeś.
+**Czy ktoś inny może planować posty na moim profilu?**
+Nie. Konektor wymaga zalogowania, a aplikacja przyjmuje tylko Twoje konto LinkedIn (właściciela). Token LinkedIn jest zaszyfrowany, a klucz leży w Key Vault. Tokenu nie zwraca żadne narzędzie.
 
 **Ile postów mogę zaplanować?**
 LinkedIn pozwala na 150 wywołań API dziennie na konto. Jeden post to kilka wywołań (post, zdjęcie, komentarz), więc przy normalnym użyciu limit nie ma znaczenia.
 
-**Czy ktoś inny może użyć planera na moim komputerze?**
-Planer nasłuchuje tylko na adresie lokalnym komputera (127.0.0.1) i wymaga tajnego tokenu dostępu, zapisanego w Twoim profilu Windows. Token LinkedIn jest zaszyfrowany kluczem z Menedżera poświadczeń Windows.
+**Czy mogę planować z telefonu?**
+Tak, ten sam konektor działa na claude.ai i w aplikacji Claude na telefonie. Zdjęcie wybierasz wtedy przez link z galerii albo aparatu.
 
-**Jak wrócić do trybu testowego?**
-`LINKEDIN_MODE=mock` w `.env` i `npm run worker:restart`.
+**Ile to kosztuje?**
+Głównie Azure: stale działająca mała instancja Container Apps i najmniejszy serwer PostgreSQL. To orientacyjnie kilkadziesiąt złotych miesięcznie, a dokładną kwotę pokaże kalkulator Azure dla wybranego regionu. Nowe konta Azure mają zwykle darmowy pierwszy rok dla małego PostgreSQL.
