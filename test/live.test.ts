@@ -67,7 +67,7 @@ function liveConfig(extra: Record<string, string> = {}): Config {
 }
 
 async function loggedIn(config: Config, store: SqliteStore) {
-  await saveLogin(config, store, { accessToken: fake.accessToken, expiresInSec: 60 * 86_400, scopes: ['openid', 'profile', 'w_member_social'] }, { sub: fake.sub, name: fake.name }, 'oauth');
+  await saveLogin(createTokenStore(config), store, { accessToken: fake.accessToken, expiresInSec: 60 * 86_400, scopes: ['openid', 'profile', 'w_member_social'] }, { sub: fake.sub, name: fake.name }, 'oauth');
 }
 
 function client(config: Config, opts: Partial<ConstructorParameters<typeof LiveLinkedIn>[0]> = {}) {
@@ -135,7 +135,7 @@ describe('szyfrowanie tokenów', () => {
     expect((await ts.info()).present).toBe(true);
     expect(JSON.stringify(await ts.info())).not.toContain('SEKRETNY');
     await expect(new TokenStore(file, new StaticKeyProvider(crypto.randomBytes(32))).load()).rejects.toThrow(/odszyfrować/);
-    expect(ts.clear()).toBe(true);
+    expect(await ts.clear()).toBe(true);
     expect(await ts.load()).toBeNull();
   });
 });
@@ -165,7 +165,7 @@ describe('LiveLinkedIn (atrapa serwera HTTP)', () => {
     const file = path.join(tmpDataDir(), 'a.png');
     const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
     fs.writeFileSync(file, bytes);
-    await client(config).publishPost({ text: 'Z obrazem', idempotencyKey: 'k', image: { file, mime: 'image/png', sha256: 'x', bytes: bytes.length, alt: 'Opis' } });
+    await client(config).publishPost({ text: 'Z obrazem', idempotencyKey: 'k', image: { data: bytes, mime: 'image/png', sha256: 'x', bytes: bytes.length, alt: 'Opis' } });
     const init = fake.requests.find((x) => x.path.startsWith('/rest/images?action=initializeUpload'))!;
     expect(init.json).toEqual({ initializeUploadRequest: { owner: `urn:li:person:${fake.sub}` } });
     const put = fake.requests.find((x) => x.method === 'PUT')!;
@@ -180,7 +180,7 @@ describe('LiveLinkedIn (atrapa serwera HTTP)', () => {
     fake.behavior.imageStatus = 403;
     const file = path.join(tmpDataDir(), 'b.gif');
     fs.writeFileSync(file, Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
-    await expect(client(config).publishPost({ text: 'x', idempotencyKey: 'k', image: { file, mime: 'image/gif', sha256: 'x', bytes: 1, alt: '' } })).resolves.toBeTruthy();
+    await expect(client(config).publishPost({ text: 'x', idempotencyKey: 'k', image: { data: fs.readFileSync(file), mime: 'image/gif', sha256: 'x', bytes: 1, alt: '' } })).resolves.toBeTruthy();
   });
 
   it('komentarz: socialActions z zakodowanym URN, actor/object/message', async () => {
@@ -219,7 +219,7 @@ describe('LiveLinkedIn (atrapa serwera HTTP)', () => {
     const { config } = await setupLive();
     const file = path.join(tmpDataDir(), 'c.png');
     fs.writeFileSync(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
-    const img = { file, mime: 'image/png', sha256: 'x', bytes: 1, alt: '' };
+    const img = { data: fs.readFileSync(file), mime: 'image/png', sha256: 'x', bytes: 1, alt: '' };
     fake.behavior.upload = 500;
     await expectKind(client(config).publishPost({ text: 't', idempotencyKey: 'k', image: img }), 'network', false);
     fake.behavior.upload = 'ok';
@@ -241,7 +241,7 @@ describe('LiveLinkedIn (atrapa serwera HTTP)', () => {
     await expectKind(client(config).publishPost({ text: 't', idempotencyKey: 'k' }), 'unauthorized', false);
     const store = new SqliteStore(':memory:');
     cleanups.push(() => store.close());
-    await saveLogin(config, store, { accessToken: fake.accessToken, expiresInSec: -10, scopes: [] }, { sub: 's', name: null }, 'oauth');
+    await saveLogin(createTokenStore(config), store, { accessToken: fake.accessToken, expiresInSec: -10, scopes: [] }, { sub: 's', name: null }, 'oauth');
     await expectKind(client(config).publishPost({ text: 't', idempotencyKey: 'k' }), 'unauthorized', false);
     expect(fake.requests).toHaveLength(0);
   });

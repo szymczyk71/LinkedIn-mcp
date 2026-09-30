@@ -16,13 +16,13 @@ import {
   type Post,
   type PostEvent,
 } from './model.js';
-import { readPause } from './pause.js';
 import { initialCommentStatus, newPostFromPlanned } from './posts.js';
 import { TimeInputError, formatLocal, minutesBetween, nextTickUtc, parseLocalDateTime, tickWindow } from './time.js';
 import { charCount, newId, textHash } from './util.js';
 import { isValidTimezone } from './config.js';
-import { ImageError, stageImage, type PostImage } from './image.js';
-import { createTokenStore } from './linkedin/oauth.js';
+import { ImageError, type PostImage } from './image.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /** Limit Images API: obrazy poniżej 36 152 320 pikseli. */
 const MAX_IMAGE_PIXELS = 36_152_320;
@@ -59,6 +59,11 @@ export const PreviewPostInput = z.object({
     .max(1000)
     .optional()
     .describe('Opcjonalny obraz: pełna ścieżka do pliku JPG/PNG/GIF na dysku użytkownika, np. C:\\Users\\...\\grafika.png.'),
+  image_id: z
+    .string()
+    .max(100)
+    .optional()
+    .describe('Identyfikator zdjęcia przesłanego przez link z linkedin_request_image_upload (img_...). Tylko w wersji serwerowej.'),
   image_alt: z.string().max(4000).optional().describe('Tekst alternatywny obrazu (dla czytników ekranu).'),
 });
 
@@ -86,7 +91,8 @@ export const UpdatePostInput = z.object({
   comment_text: text().optional(),
   comment_text_no_link: text().optional(),
   if_no_link: z.enum(IF_NO_LINK).optional(),
-  image_path: z.string().max(1000).optional().describe('Nowy obraz (pełna ścieżka JPG/PNG/GIF).'),
+  image_path: z.string().max(1000).optional().describe('Nowy obraz (pełna ścieżka JPG/PNG/GIF) - wersja lokalna.'),
+  image_id: z.string().max(100).optional().describe('Nowy obraz przesłany przez link (img_...) - wersja serwerowa.'),
   image_alt: z.string().max(4000).optional().describe('Nowy tekst alternatywny obrazu.'),
   remove_image: z.boolean().optional().describe('true = usuń obraz z posta.'),
 });
@@ -139,13 +145,13 @@ export class LinkedInService {
     if (!info.connected) warnings.push('Brak połączenia z LinkedIn. Zaloguj się na stronie login_url.');
     if (daysLeft !== null && daysLeft <= 7) warnings.push(`Logowanie do LinkedIn wygasa za ${daysLeft} dni. Zaloguj się ponownie (login_url).`);
     if (info.connected && !info.canPost) warnings.push('Brak uprawnienia do publikacji (w_member_social).');
-    const pause = readPause(config.paths.pauseFlagFile);
+    const pause = await this.ctx.pause.read();
     if (pause.paused) warnings.push('Bezpiecznik PAUSE jest włączony: harmonogram niczego nie publikuje.');
     const failedRecently = (await store.listPosts({ status: 'failed', limit: 20 })).length;
     if (failedRecently) warnings.push(`W kolejce są posty z błędem publikacji (${failedRecently}). Sprawdź linkedin_list_queue ze statusem failed.`);
 
     // Stan prawdziwego logowania (także w trybie atrapy - żeby przed przełączeniem było widać, czy jest token).
-    const tok = await createTokenStore(config).info();
+    const tok = await this.ctx.tokens.info();
     const liveMeta = await store.getAuthMeta('live');
     const liveLogin = {
       present: tok.present,
@@ -207,8 +213,8 @@ export class LinkedInService {
       if (p.link_mode !== 'later' && p.if_no_link) chk.warnings.push('if_no_link jest ignorowane, gdy link_mode = none.');
 
       let image: PostImage | null = null;
-      if (p.image_path?.trim()) image = this.checkImage(p.image_path, p.image_alt ?? '', chk);
-      else if (p.image_alt) chk.warnings.push('image_alt podano bez image_path - zignorowano.');
+      if (p.image_path?.trim() || p.image_id?.trim()) image = await this.checkImage({ path: p.image_path, id: p.image_id }, p.image_alt ?? '', chk);
+      else if (p.image_alt) chk.warnings.push('image_alt podano bez obrazu - zignorowano.');
 
       const hash = textHash(postText);
       if (seenHashes.has(hash)) chk.errors.push(`Treść identyczna jak w poście nr ${seenHashes.get(hash)} tej serii.`);
@@ -398,7 +404,7 @@ export class LinkedInService {
       throw await reject('not_editable', `Post ma status "${post.status}" - edycja jest możliwa tylko dla scheduled i missed.`);
     }
     const fields = (
-      ['text', 'publish_at', 'comment_text', 'comment_text_no_link', 'if_no_link', 'image_path', 'image_alt', 'remove_image'] as const
+      ['text', 'publish_at', 'comment_text', 'comment_text_no_link', 'if_no_link', 'image_path', 'image_id', 'image_alt', 'remove_image'] as const
     ).filter((f) => args[f] !== undefined);
     if (fields.length === 0) throw await reject('nothing_to_update', 'Nie podano żadnego pola do zmiany.');
     if (post.status === 'scheduled' && minutesBetween(nowIso, post.publishAtUtc) < this.cfg.minLeadMin) {
@@ -442,10 +448,11 @@ export class LinkedInService {
     if (post.linkMode === 'later' && newIfNoLink !== post.ifNoLink) patch.ifNoLink = newIfNoLink;
     if (post.linkMode !== 'later' && args.if_no_link) chk.warnings.push('if_no_link jest ignorowane, gdy link_mode = none.');
 
-    if (args.remove_image && args.image_path) {
-      chk.errors.push('Podaj albo image_path (nowy obraz), albo remove_image, nie oba naraz.');
-    } else if (args.image_path !== undefined) {
-      const img = this.checkImage(args.image_path, args.image_alt ?? post.image?.alt ?? '', chk);
+    const newImage = args.image_path !== undefined || args.image_id !== undefined;
+    if (args.remove_image && newImage) {
+      chk.errors.push('Podaj albo nowy obraz, albo remove_image, nie oba naraz.');
+    } else if (newImage) {
+      const img = await this.checkImage({ path: args.image_path, id: args.image_id }, args.image_alt ?? post.image?.alt ?? '', chk);
       if (img) patch.image = img;
     } else if (args.remove_image) {
       patch.image = null;
@@ -462,6 +469,27 @@ export class LinkedInService {
     await store.addEvent(post.id, 'updated', { fields, fromStatus: post.status, toStatus: updated.status }, nowIso);
     await audit.record(this.actor, 'linkedin_update_post', 'ok', post.id, { fields });
     return { ...presentPost(updated), warnings: chk.warnings };
+  }
+
+  // ----- linkedin_request_image_upload (server-http) -----
+  async requestImageUpload() {
+    if (!this.ctx.uploads) {
+      throw new ToolError(
+        'not_supported',
+        'W wersji lokalnej zdjęcie podaje się jako image_path (pełna ścieżka do pliku na dysku). Link do przesłania działa tylko w wersji serwerowej.',
+      );
+    }
+    const t = await this.ctx.uploads.create(this.now());
+    await this.ctx.audit.record(this.actor, 'linkedin_request_image_upload', 'ok', t.imageId, { expiresAt: t.expiresAt });
+    return {
+      image_id: t.imageId,
+      upload_url: t.uploadUrl,
+      expires_at_local: formatLocal(t.expiresAt, this.cfg.defaultTimezone),
+      max_mb: Math.round(this.cfg.imageMaxBytes / 1_048_576),
+      formats: ['JPG', 'PNG', 'GIF'],
+      message:
+        'Podaj użytkownikowi link: otworzy stronę, na której wybierze zdjęcie i je wyśle. Po potwierdzeniu użyj image_id w linkedin_preview_series (albo linkedin_update_post).',
+    };
   }
 
   // ----- linkedin_cancel_post -----
@@ -556,9 +584,57 @@ export class LinkedInService {
     }
   }
 
-  private checkImage(imagePath: string, alt: string, chk: CheckedPost): PostImage | null {
+  /**
+   * Obraz z pliku na dysku (wersja lokalna, image_path) albo przesłany przez jednorazowy link (server-http, image_id).
+   * Serwer nigdy nie czyta ścieżek z własnego dysku - image_path jest tam odrzucane.
+   */
+  private async checkImage(src: { path?: string; id?: string }, altRaw: string, chk: CheckedPost): Promise<PostImage | null> {
+    const alt = normalizeText(altRaw).trim();
+    if (src.path?.trim() && src.id?.trim()) {
+      chk.errors.push('Podaj albo image_path, albo image_id, nie oba naraz.');
+      return null;
+    }
     try {
-      const img = stageImage(imagePath, this.cfg.paths.imagesDir, this.cfg.imageMaxBytes, normalizeText(alt).trim());
+      let img: PostImage;
+      if (src.id?.trim()) {
+        if (!this.ctx.uploads) {
+          chk.errors.push('image_id działa tylko w wersji serwerowej. W wersji lokalnej podaj image_path (pełną ścieżkę do pliku).');
+          return null;
+        }
+        const st = await this.ctx.uploads.get(src.id.trim(), this.now());
+        if (st.status === 'not_found') {
+          chk.errors.push(`Nie ma zdjęcia ${src.id}. Poproś o link przez linkedin_request_image_upload.`);
+          return null;
+        }
+        if (st.status === 'pending') {
+          chk.errors.push(`Zdjęcie ${src.id} nie zostało jeszcze przesłane - otwórz link i wyślij plik (link ważny do ${formatLocal(st.expiresAt, this.cfg.defaultTimezone)}).`);
+          return null;
+        }
+        if (st.status === 'expired') {
+          chk.errors.push(`Link do przesłania zdjęcia ${src.id} wygasł, a plik nie został wysłany. Poproś o nowy link.`);
+          return null;
+        }
+        img = { ...st.image, alt };
+      } else {
+        if (this.ctx.images.kind !== 'file') {
+          chk.errors.push('Serwer nie ma dostępu do plików na Twoim komputerze. Użyj linkedin_request_image_upload i podaj image_id.');
+          return null;
+        }
+        const p = (src.path ?? '').trim().replace(/^"(.*)"$/, '$1');
+        if (!path.isAbsolute(p)) throw new ImageError('image_path_not_absolute', `Ścieżka obrazu musi być pełna (np. C:\\Users\\...\\grafika.png), podano: ${src.path}`);
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(p);
+        } catch {
+          throw new ImageError('image_not_found', `Nie znaleziono pliku obrazu: ${p}`);
+        }
+        if (!stat.isFile()) throw new ImageError('image_not_file', `To nie jest plik: ${p}`);
+        if (stat.size === 0) throw new ImageError('image_empty', `Plik obrazu jest pusty: ${p}`);
+        if (stat.size > this.cfg.imageMaxBytes) {
+          throw new ImageError('image_too_large', `Obraz ma ${(stat.size / 1_048_576).toFixed(1)} MB - limit to ${(this.cfg.imageMaxBytes / 1_048_576).toFixed(0)} MB.`);
+        }
+        img = await this.ctx.images.put(fs.readFileSync(p), path.basename(p), this.cfg.imageMaxBytes, alt);
+      }
       if (img.width && img.height && img.width * img.height >= MAX_IMAGE_PIXELS) {
         chk.errors.push(`Obraz ma ${img.width}×${img.height} pikseli - LinkedIn przyjmuje mniej niż 36 152 320 pikseli.`);
         return null;

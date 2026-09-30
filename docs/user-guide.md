@@ -1,6 +1,6 @@
 # Planer postów LinkedIn – przewodnik użytkownika
 
-> **Stan dokumentu:** opisuje wersję docelową, w której aplikacja działa w Azure i jest podłączona do Claude jako konektor MCP (etap 6, w przygotowaniu). Obecnie działa wersja lokalna (worker na komputerze), używana do testów. Opisuje ją [README](../README.md).
+> **Stan dokumentu:** opisuje wersję docelową: aplikacja w Azure, podłączona do Claude jako konektor MCP. Kod jest gotowy i przetestowany, a wdrożenie opisuje [azure-deployment.md](azure-deployment.md). Wersja lokalna (worker na komputerze) służy do testów i opisuje ją [README](../README.md).
 
 Ten dokument opisuje, jak wygląda codzienna praca z planerem i co trzeba zrobić raz, żeby wszystko działało. Specyfikacja narzędzi jest w [mcp-tools-contract.md](mcp-tools-contract.md).
 
@@ -31,7 +31,7 @@ Claude Desktop ──konektor MCP (HTTPS)──> aplikacja w Azure ──o 8:00�
 | **Gdzie widać zaplanowane posty** | W Claude („pokaż kolejkę”). **Nie** w zakładce „Zaplanowane posty” na LinkedIn, bo API LinkedIn nie pozwala tam dodawać postów. Planer trzyma kolejkę u siebie i publikuje w wyznaczonej chwili, tak jak Buffer czy Hootsuite. |
 | **Dokładność godziny** | Harmonogram sprawdza kolejkę co 5 minut (:00, :05, :10…). Termin 8:00 oznacza publikację o 8:00, a termin 8:02 publikację o 8:05, o czym podgląd uprzedza. |
 | **Zdjęcia** | Jedno zdjęcie na post (JPG, PNG albo GIF), wysyłane przez **jednorazowy link**, który podaje Claude (punkt 3). Samego obrazka wklejonego do czatu Claude nie może przekazać aplikacji. |
-| **Logowanie** | Jedno logowanie przez LinkedIn łączy konektor z Twoim kontem i daje aplikacji prawo publikowania. Dostęp ma tylko Twoje konto. Logowanie jest ważne 60 dni. |
+| **Logowanie** | Jedno logowanie przez LinkedIn łączy konektor z Twoim kontem i daje aplikacji prawo publikowania. **Pierwsze konto, które się połączy, zostaje właścicielem**, a każde inne dostaje odmowę. Logowanie jest ważne 60 dni. |
 | **Skąd planować** | Z Claude Desktop. Ten sam konektor zadziała też na claude.ai i w aplikacji Claude na telefonie, jeśli kiedyś zechcesz. |
 
 ---
@@ -51,7 +51,7 @@ Na [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps), w a
 
 ### Krok 2. Wdrożenie w Azure
 
-Robi się to raz, według instrukcji w README (etap 6). Powstają:
+Robi się to raz, według [azure-deployment.md](azure-deployment.md). Powstają:
 
 | Zasób | Po co |
 |---|---|
@@ -79,7 +79,7 @@ Jeśli wcześniej był podłączony lokalny serwer `linkedin` (wersja testowa), 
 
 1. W trybie `mock` zaplanuj próbną serię i sprawdź kolejkę oraz „publikację” (nic nie trafia na LinkedIn).
 2. Przełącz aplikację na `live` według instrukcji w README. Posty zatwierdzone w trybie atrapy **nie zostaną** opublikowane: dostaną status `failed` z kodem `mode_mismatch`.
-3. Zaplanuj jeden krótki post testowy za około 10 minut, z komentarzem po 1–2 minutach. Sprawdź go na LinkedIn, a potem możesz poprosić Claude'a o usunięcie posta testowego z LinkedIn.
+3. Zaplanuj jeden krótki post testowy za około 10 minut, z komentarzem po 1–2 minutach. Sprawdź go na LinkedIn. Post testowy usuniesz ręcznie na LinkedIn (menu „…” przy poście → Usuń).
 
 Po pierwszym komentarzu `can_comment` w statusie zmieni się z `unknown` na `yes` albo `no`. Wartość `no` oznacza, że aplikacja nie ma prawa komentować; komentarze będą wtedy pomijane, a posty nadal będą wychodzić.
 
@@ -145,7 +145,7 @@ Treść wychodzi dokładnie tak, jak w podglądzie, łącznie z nawiasami, gwiaz
 | **Aplikacja w Azure nie działała w terminie** (np. awaria, restart) | spóźnienie poniżej 60 min: post wychodzi po wznowieniu; powyżej: status `missed` | Poproś Claude'a o nowy termin dla tego posta albo go anuluj. |
 | **Brak uprawnień do komentarzy** | komentarz `skipped`, `can_comment: no` | Posty dalej wychodzą, tylko bez komentarza. Komentarz dodasz ręcznie. |
 | **Link nie został podany na czas** | komentarz wychodzi w wersji bez linku albo jest pomijany | tak, jak ustaliłeś przy planowaniu |
-| **Chcesz natychmiast wstrzymać publikację** | – | Napisz Claude'owi „wstrzymaj publikację”. Nic nie wyjdzie do polecenia „wznów publikację”. |
+| **Chcesz natychmiast wstrzymać publikację** | – | Komenda administracyjna `npm run cli -- server pause "powód"` (z dostępem do bazy, patrz [azure-deployment.md](azure-deployment.md), punkt 9). Nic nie wyjdzie do `server resume`. Pojedynczy post anulujesz w Claude („anuluj post z czwartku”). |
 | **Logowanie LinkedIn wygasa (co 60 dni)** | Tydzień wcześniej status i alert e-mail „wygasa za N dni”. | W Claude Desktop: **Settings → Connectors → LinkedIn → Connect** (ponowne logowanie). Kolejka zostaje nietknięta. |
 | **Link do zdjęcia wygasł** | strona „link wygasł” | Poproś Claude'a o nowy link. |
 
@@ -174,7 +174,7 @@ Claude widzi wklejony obraz, ale nie może przekazać pliku do konektora. Link o
 Nic się nie stanie. Aplikacja ma własną kopię i opublikuje dokładnie to zdjęcie, które zatwierdziłeś.
 
 **Czy ktoś inny może planować posty na moim profilu?**
-Nie. Konektor wymaga zalogowania, a aplikacja przyjmuje tylko Twoje konto LinkedIn (właściciela). Token LinkedIn jest zaszyfrowany, a klucz leży w Key Vault. Tokenu nie zwraca żadne narzędzie.
+Nie. Konektor wymaga zalogowania, a aplikacja przyjmuje tylko konto LinkedIn właściciela, czyli pierwsze, które się połączyło. Połącz się więc od razu po wdrożeniu. Token LinkedIn jest zaszyfrowany, a klucz leży w Key Vault. Tokenu nie zwraca żadne narzędzie. Gdyby trzeba było zmienić właściciela: `npm run cli -- server owner-reset --yes`.
 
 **Ile postów mogę zaplanować?**
 LinkedIn pozwala na 150 wywołań API dziennie na konto. Jeden post to kilka wywołań (post, zdjęcie, komentarz), więc przy normalnym użyciu limit nie ma znaczenia.

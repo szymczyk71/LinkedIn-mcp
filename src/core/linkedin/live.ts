@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { escapeLittle } from '../little.js';
 import type { TokenRecord, TokenStore } from '../token-store.js';
 import {
@@ -116,13 +115,12 @@ export class LiveLinkedIn implements LinkedInClient {
       const imageUrn = j.value?.image;
       if (!uploadUrl || !imageUrn) throw new LinkedInError('rejected', 'LinkedIn nie zwrócił adresu wysyłania obrazu.');
 
-      const data = fs.readFileSync(img.file);
       let up: Response;
       try {
         up = await this.f(uploadUrl, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${rec.accessToken}`, 'Content-Type': img.mime },
-          body: data,
+          body: img.data,
           signal: AbortSignal.timeout(this.o.uploadTimeoutMs ?? 120_000),
         });
       } catch (e) {

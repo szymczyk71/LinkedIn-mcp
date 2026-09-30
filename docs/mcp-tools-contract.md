@@ -39,7 +39,8 @@ Parametry:
   - `comment_text_no_link` - zatwierdzona wersja komentarza bez linku, używana gdy link nie zostanie podany na czas
   - `if_no_link` - `post_without_link` lub `skip`
   - `comment_delay_min` - opóźnienie komentarza w minutach (domyślnie 10)
-  - `image_path` - opcjonalnie: pełna ścieżka do pliku obrazu (JPG, PNG lub GIF) na dysku użytkownika; jeden obraz na post
+  - `image_id` - opcjonalnie (wariant serwerowy): identyfikator zdjęcia przesłanego przez link z `linkedin_request_image_upload`
+  - `image_path` - opcjonalnie (wersja lokalna): pełna ścieżka do pliku obrazu (JPG, PNG lub GIF) na dysku użytkownika; jeden obraz na post
   - `image_alt` - opcjonalnie: tekst alternatywny obrazu
 
 Zwraca: `plan_id`, `expires_in_min` (ważność planu), `posts` (dla każdego: numer, `publish_at_local`, `publish_at_utc`, liczba znaków, `warnings`, `errors`) oraz podsumowanie.
@@ -76,7 +77,7 @@ Parametry: `id`. Zwraca pełne dane jednego posta wraz z historią zdarzeń.
 
 Zmienia treść, termin lub komentarz posta **przed publikacją**.
 
-Parametry: `id` oraz pola do zmiany (`text`, `publish_at`, `comment_text`, `comment_text_no_link`, `if_no_link`, `image_path`, `image_alt`, `remove_image`). Zwraca zaktualizowany post. Odrzuca zmianę, jeśli post ma już status inny niż `scheduled` lub `missed`, albo termin jest bliższy niż 5 minut.
+Parametry: `id` oraz pola do zmiany (`text`, `publish_at`, `comment_text`, `comment_text_no_link`, `if_no_link`, `image_id` albo `image_path`, `image_alt`, `remove_image`). Zwraca zaktualizowany post. Odrzuca zmianę, jeśli post ma już status inny niż `scheduled` lub `missed`, albo termin jest bliższy niż 5 minut.
 
 Post ze statusem `missed` można przywrócić do harmonogramu, podając nowy `publish_at` (co najmniej 5 minut w przyszłości). Po takiej zmianie wraca do statusu `scheduled`. Zmiana samej treści posta `missed` bez nowego terminu jest odrzucana.
 
@@ -113,7 +114,10 @@ Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce 
 
 ### Obrazy
 
-- Post może mieć jeden obraz. `image_path` to pełna ścieżka do pliku na dysku użytkownika; może być w cudzysłowie, jak przy kopiowaniu z Eksploratora. Obrazu wklejonego do czatu nie da się przekazać, trzeba podać ścieżkę do pliku.
+- Post może mieć jeden obraz. Obrazu wklejonego do czatu nie da się przekazać do narzędzia. Są dwa sposoby dostarczenia pliku:
+  - wariant serwerowy: `image_id` z `linkedin_request_image_upload` (jednorazowy link, plik wysyłany przez stronę);
+  - wersja lokalna: `image_path`, czyli pełna ścieżka do pliku na dysku użytkownika (może być w cudzysłowie, jak przy kopiowaniu z Eksploratora).
+  Podanie obu naraz to błąd.
 - Format serwer rozpoznaje po nagłówku pliku, a nie po rozszerzeniu. Dozwolone formaty to JPG, PNG i GIF, a limit rozmiaru ustawia `IMAGE_MAX_MB` (domyślnie 10 MB). Limity LinkedIn (rozmiar, rozdzielczość, długość tekstu alternatywnego) zostaną sprawdzone w dokumentacji Images API w etapie 5.
 - Przy podglądzie serwer kopiuje plik do katalogu danych (`images/<sha256>.<rozszerzenie>`). Zatwierdzenie i publikacja używają tej kopii, więc późniejsza zmiana lub usunięcie oryginału nie zmienia zatwierdzonej treści. Jeśli kopia zniknie albo się zmieni, post dostaje `failed` z kodem `image_missing` i nie jest wysyłany.
 - Podgląd i dane posta zawierają `image`: `file_name`, `mime`, `bytes`, `width`, `height`, `alt`. Brak `image_alt` daje ostrzeżenie. Podsumowanie podglądu ma pole `with_image`.
@@ -124,7 +128,7 @@ Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce 
 
 Błąd narzędzia ma postać `{ "error": { "code", "message", "details"? } }`, a `isError` jest ustawione na `true`.
 
-`invalid_arguments`, `invalid_timezone`, `invalid_datetime`, `nonexistent_local_time`, `plan_not_found`, `plan_expired`, `plan_already_committed` (w `details` jest `series_id`), `plan_no_longer_valid`, `post_not_found`, `not_editable`, `nothing_to_update`, `too_close_to_publish`, `missed_requires_new_time`, `validation_failed` (w `details` są `errors` i `warnings`), `not_cancelable`, `invalid_url`, `not_link_later`, `comment_not_pending`, `conflict`, `internal_error`.
+`invalid_arguments`, `invalid_timezone`, `invalid_datetime`, `nonexistent_local_time`, `plan_not_found`, `plan_expired`, `plan_already_committed` (w `details` jest `series_id`), `plan_no_longer_valid`, `post_not_found`, `not_editable`, `nothing_to_update`, `too_close_to_publish`, `missed_requires_new_time`, `validation_failed` (w `details` są `errors` i `warnings`), `not_cancelable`, `invalid_url`, `not_link_later`, `comment_not_pending`, `not_supported`, `conflict`, `internal_error`.
 
 Błędy nakładki stdio: `worker_not_running` (komunikat zawiera komendę uruchomienia workera), `worker_timeout`, `worker_auth_failed`, `worker_bad_response`, `config_error`.
 
@@ -138,6 +142,30 @@ Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthoriz
 - Po błędzie niejednoznacznym, czyli timeoucie po wysłaniu, zerwanym połączeniu albo przerwaniu przez restart, serwer niczego nie ponawia automatycznie. Nie ponawia też po błędzie jednoznacznym: post dostaje status `failed`, a ponowienie wymaga decyzji użytkownika.
 - Komentarz, którego termin minął o co najmniej `MISSED_GRACE_MIN` minut (serwer nie działał), jest pomijany: status komentarza `skipped`, kod `comment_missed`.
 - Przy bezpieczniku `PAUSE` harmonogram nie publikuje postów ani komentarzy. Polityka `missed` nadal działa.
+
+### `linkedin_request_image_upload`
+
+Tworzy jednorazowy link do strony, na której użytkownik wybiera i wysyła zdjęcie do posta (także z telefonu). Bez parametrów.
+
+Zwraca: `image_id` (`img_…`), `upload_url`, `expires_at_local` (ważność 15 minut), `max_mb` i `formats`.
+
+Po przesłaniu `image_id` podaje się w `linkedin_preview_series` albo w `linkedin_update_post`. Link działa tylko raz i wygasa po 15 minutach. Narzędzie działa wyłącznie w wariancie serwerowym. W wersji lokalnej zwraca błąd `not_supported`, a zdjęcie podaje się jako `image_path`.
+
+## Wariant serwerowy (server-http, Azure)
+
+- Serwer MCP jest pod `<PUBLIC_BASE_URL>/mcp` (Streamable HTTP, bezstanowo) i jest chroniony OAuth 2.1. Serwer sam pełni rolę serwera autoryzacji:
+  - Dynamic Client Registration i PKCE S256;
+  - odpowiedź `401` z `WWW-Authenticate: Bearer resource_metadata=…`;
+  - metadane pod `/.well-known/oauth-protected-resource` i `/.well-known/oauth-authorization-server`;
+  - rotacja tokenów odświeżania i unieważnienie całej rodziny tokenów przy ponownym użyciu starego tokenu odświeżania.
+- Użytkownik potwierdza tożsamość logowaniem LinkedIn (`openid profile w_member_social`). To samo logowanie zapisuje zaszyfrowany token LinkedIn do publikacji.
+- **Pierwsze konto LinkedIn, które się połączy, zostaje właścicielem.** Inne konta dostają odmowę. Właściciela resetuje komenda administracyjna `server owner-reset`.
+- Token odświeżania konektora działa najwyżej do wygaśnięcia logowania LinkedIn (60 dni). Potem Claude prosi o ponowne połączenie, które odnawia też token LinkedIn.
+- Obrazy przyjmowane są wyłącznie przez `image_id`. Pole `image_path` jest odrzucane, bo serwer nie czyta plików z własnego dysku.
+- Wszystkie dane są w PostgreSQL: kolejka, historia, audyt, zdjęcia, zaszyfrowany token, dane OAuth i bezpiecznik.
+- Bezpiecznik działa przez komendę administracyjną (`server pause` / `server resume`), a nie przez narzędzie MCP.
+- Obowiązuje limit zapytań na adres IP (`RATE_LIMIT_PER_MIN`, dla endpointów OAuth ciaśniejszy) oraz limity rozmiaru zapytań.
+- Instrukcja wdrożenia: [azure-deployment.md](azure-deployment.md).
 
 ## Statusy posta
 
@@ -159,7 +187,7 @@ Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthoriz
 
 ## Wymagania niefunkcjonalne dla serwera
 
-- Publiczny adres HTTPS i transport strumieniowy HTTP (Streamable HTTP).
+- Publiczny adres HTTPS i transport strumieniowy HTTP (Streamable HTTP). Zrealizowane w wariancie server-http (patrz „Wariant serwerowy”).
 - Uwierzytelnianie punktu końcowego MCP (nie zostawiaj go otwartego w produkcji) oraz ograniczenie liczby wywołań.
 - Harmonogram odporny na restart: stan w bazie, blokada wiersza przy publikacji, jedna publikacja na wiersz (idempotentnie).
 - Alert przed wygaśnięciem logowania LinkedIn (około 60 dni) i po błędzie publikacji.

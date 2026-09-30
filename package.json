@@ -31,7 +31,11 @@
     "setup": "npm install && npm run build",
     "login": "node dist/cli/index.js login",
     "token:status": "node dist/cli/index.js token status",
-    "token:import": "node dist/cli/index.js token import"
+    "token:import": "node dist/cli/index.js token import",
+    "server-http": "node dist/server-http/index.js",
+    "server:status": "node dist/cli/index.js server status",
+    "server:pause": "node dist/cli/index.js server pause",
+    "server:resume": "node dist/cli/index.js server resume"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
@@ -40,12 +44,14 @@
     "bree": "^9.2.9",
     "dotenv": "^18.0.4",
     "luxon": "^3.7.2",
+    "pg": "^8.23.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/luxon": "^3.7.6",
     "@types/node": "^26.6.3",
+    "@types/pg": "^8.23.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"
   },

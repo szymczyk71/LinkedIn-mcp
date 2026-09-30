@@ -20,6 +20,7 @@ export const TOOL_NAMES = [
   'linkedin_update_post',
   'linkedin_cancel_post',
   'linkedin_set_comment_link',
+  'linkedin_request_image_upload',
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -48,7 +49,7 @@ export const TOOLS: ToolDef[] = [
     title: 'Podgląd serii postów',
     description:
       'Waliduje serię postów i zwraca podgląd oraz plan_id. NICZEGO nie zapisuje do kolejki. Terminy w czasie lokalnym (ISO 8601 bez strefy), min. 5 minut w przód. Harmonogram działa co 5 minut. ' +
-      'Post może mieć jeden obraz (image_path: pełna ścieżka do pliku JPG/PNG/GIF na dysku użytkownika, image_alt: tekst alternatywny). Obrazu wklejonego do czatu nie da się przekazać - poproś użytkownika o ścieżkę do pliku. ' +
+      'Post może mieć jeden obraz (JPG/PNG/GIF) i tekst alternatywny (image_alt). Obrazu wklejonego do czatu nie da się przekazać. Wersja serwerowa: wywołaj linkedin_request_image_upload, daj użytkownikowi link, a po przesłaniu podaj image_id. Wersja lokalna: image_path (pełna ścieżka do pliku). ' +
       'Pokaż wynik użytkownikowi i dopiero po jego akceptacji wywołaj linkedin_commit_series. ' +
       DATA_NOTE,
     input: PreviewSeriesInput,
@@ -81,7 +82,7 @@ export const TOOLS: ToolDef[] = [
     name: 'linkedin_update_post',
     title: 'Zmiana posta przed publikacją',
     description:
-      'Zmienia treść, termin, komentarz lub obraz (image_path, image_alt, remove_image) posta ze statusem scheduled albo missed. Post missed wymaga nowego publish_at i wraca wtedy do scheduled. Odrzuca zmianę, gdy do publikacji zostało mniej niż 5 minut. Pokaż zmianę użytkownikowi przed wywołaniem.',
+      'Zmienia treść, termin, komentarz lub obraz (image_id albo image_path, image_alt, remove_image) posta ze statusem scheduled albo missed. Post missed wymaga nowego publish_at i wraca wtedy do scheduled. Odrzuca zmianę, gdy do publikacji zostało mniej niż 5 minut. Pokaż zmianę użytkownikowi przed wywołaniem.',
     input: UpdatePostInput,
     annotations: { destructiveHint: false },
   },
@@ -97,6 +98,14 @@ export const TOOLS: ToolDef[] = [
     title: 'Link do komentarza',
     description: 'Uzupełnia link (http/https) w komentarzu z link_mode = later; serwer wstawia go w miejsce [LINK].',
     input: SetCommentLinkInput,
+    annotations: { destructiveHint: false },
+  },
+  {
+    name: 'linkedin_request_image_upload',
+    title: 'Link do przesłania zdjęcia',
+    description:
+      'Tworzy jednorazowy link (ważny 15 min) do strony, na której użytkownik wybiera i wysyła zdjęcie do posta (także z telefonu). Zwraca image_id, który po przesłaniu podajesz w linkedin_preview_series albo linkedin_update_post. Tylko w wersji serwerowej.',
+    input: null,
     annotations: { destructiveHint: false },
   },
 ];
@@ -125,6 +134,8 @@ export async function invokeOnService(service: LinkedInService, name: ToolName, 
       return service.cancelPost(args);
     case 'linkedin_set_comment_link':
       return service.setCommentLink(args);
+    case 'linkedin_request_image_upload':
+      return service.requestImageUpload();
   }
 }
 

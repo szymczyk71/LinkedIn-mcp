@@ -60,7 +60,16 @@ const EnvSchema = z.object({
   LINKEDIN_OAUTH_BASE: optionalString,
   LINKEDIN_MCP_ENC_KEY: optionalString,
   HTTP_PORT: intFromEnv(8080, 1, 65535),
-  MCP_HTTP_TOKEN: optionalString,
+  /** server-http: adres nasłuchu. Lokalnie 127.0.0.1; w kontenerze (Azure) 0.0.0.0 za bramą HTTPS. */
+  HTTP_HOST: optionalString,
+  /** server-http: publiczny adres HTTPS aplikacji, np. https://linkedin-mcp.xxx.azurecontainerapps.io */
+  PUBLIC_BASE_URL: optionalString,
+  /** server-http: PostgreSQL, np. postgres://user:pass@host:5432/db?sslmode=require */
+  DATABASE_URL: optionalString,
+  MCP_ACCESS_TOKEN_TTL_MIN: intFromEnv(60, 5, 24 * 60),
+  /** Dodatkowe dozwolone adresy zwrotne klientów OAuth (oprócz Claude i loopback), oddzielone przecinkami. */
+  OAUTH_EXTRA_REDIRECT_URIS: optionalString,
+  RATE_LIMIT_PER_MIN: intFromEnv(120, 10, 10_000),
 });
 
 export type LinkedInMode = 'mock' | 'live';
@@ -104,7 +113,15 @@ export interface Config {
     oauthBase: string;
   };
   encKeyFromEnv?: string;
-  http: { port: number; token?: string };
+  http: {
+    port: number;
+    host: string;
+    publicBaseUrl: string | null;
+    databaseUrl: string | null;
+    accessTokenTtlMin: number;
+    extraRedirectUris: string[];
+    rateLimitPerMin: number;
+  };
 }
 
 export class ConfigError extends Error {
@@ -161,6 +178,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
   }
 
   const tz = e.DEFAULT_TIMEZONE ?? 'Europe/Warsaw';
+
+  let publicBaseUrl: string | null = null;
+  if (e.PUBLIC_BASE_URL) {
+    let u: URL;
+    try {
+      u = new URL(e.PUBLIC_BASE_URL);
+    } catch {
+      throw new ConfigError(`PUBLIC_BASE_URL nie jest poprawnym adresem: ${e.PUBLIC_BASE_URL}`);
+    }
+    const loopback = ['localhost', '127.0.0.1'].includes(u.hostname);
+    if (u.protocol !== 'https:' && !loopback) throw new ConfigError('PUBLIC_BASE_URL musi używać https:// (wyjątek: localhost do testów).');
+    if (u.pathname !== '/' || u.search || u.hash) throw new ConfigError('PUBLIC_BASE_URL to sam adres bez ścieżki, np. https://moja-aplikacja.azurecontainerapps.io');
+    publicBaseUrl = u.origin;
+  }
   if (!isValidTimezone(tz)) throw new ConfigError(`Nieznana strefa czasowa DEFAULT_TIMEZONE: ${tz}`);
 
   if (e.LINKEDIN_MCP_ENC_KEY !== undefined && Buffer.from(e.LINKEDIN_MCP_ENC_KEY, 'base64').length !== 32) {
@@ -183,7 +214,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
     linkedin: {
       clientId: e.LINKEDIN_CLIENT_ID,
       clientSecret: e.LINKEDIN_CLIENT_SECRET,
-      redirectUri: e.LINKEDIN_REDIRECT_URI ?? `http://${LOOPBACK_HOST}:${e.WORKER_PORT}/oauth/callback`,
+      redirectUri:
+        e.LINKEDIN_REDIRECT_URI ??
+        (publicBaseUrl ? `${publicBaseUrl}/oauth/callback` : `http://${LOOPBACK_HOST}:${e.WORKER_PORT}/oauth/callback`),
       apiVersion: e.LINKEDIN_API_VERSION,
       visibility: e.LINKEDIN_POST_VISIBILITY,
       scopes: (e.LINKEDIN_SCOPES ?? 'openid profile w_member_social').split(/[\s,]+/).filter(Boolean),
@@ -191,7 +224,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
       oauthBase: (e.LINKEDIN_OAUTH_BASE ?? 'https://www.linkedin.com').replace(/\/$/, ''),
     },
     encKeyFromEnv: e.LINKEDIN_MCP_ENC_KEY,
-    http: { port: e.HTTP_PORT, token: e.MCP_HTTP_TOKEN },
+    http: {
+      port: e.HTTP_PORT,
+      host: e.HTTP_HOST ?? LOOPBACK_HOST,
+      publicBaseUrl,
+      databaseUrl: e.DATABASE_URL ?? null,
+      accessTokenTtlMin: e.MCP_ACCESS_TOKEN_TTL_MIN,
+      extraRedirectUris: (e.OAUTH_EXTRA_REDIRECT_URIS ?? '').split(',').map((x) => x.trim()).filter(Boolean),
+      rateLimitPerMin: e.RATE_LIMIT_PER_MIN,
+    },
   };
 }
 

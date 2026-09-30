@@ -31,7 +31,7 @@ function localInDays(days: number, hour: number): string {
 }
 
 describe('nakładka stdio (klient MCP)', () => {
-  it('udostępnia 8 narzędzi z kontraktu i obsługuje pełny przepływ podgląd -> zatwierdzenie -> kolejka', async () => {
+  it('udostępnia 9 narzędzi z kontraktu i obsługuje pełny przepływ podgląd -> zatwierdzenie -> kolejka', async () => {
     const dataDir = tmpDataDir();
     const port = await freePort();
     const env = isolatedEnv(dataDir, port);
@@ -48,11 +48,16 @@ describe('nakładka stdio (klient MCP)', () => {
         'linkedin_get_post',
         'linkedin_list_queue',
         'linkedin_preview_series',
+        'linkedin_request_image_upload',
         'linkedin_set_comment_link',
         'linkedin_update_post',
       ].sort(),
     );
     expect(tools.some((t) => /publish_now|publish$/.test(t))).toBe(false);
+
+    const upl = await client.callTool({ name: 'linkedin_request_image_upload', arguments: {} });
+    expect(upl.isError).toBe(true);
+    expect(parse(upl).error.code).toBe('not_supported'); // wersja lokalna: image_path
 
     const auth = parse(await client.callTool({ name: 'linkedin_auth_status', arguments: {} }));
     expect(auth).toMatchObject({ connected: true, can_comment: 'unknown', mode: 'mock', login_url: `http://127.0.0.1:${port}/oauth/start` });

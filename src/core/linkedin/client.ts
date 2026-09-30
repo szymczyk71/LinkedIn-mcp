@@ -11,8 +11,8 @@ export interface AuthInfo {
 }
 
 export interface PublishImage {
-  /** Zatwierdzona kopia pliku w katalogu danych. */
-  file: string;
+  /** Treść zatwierdzonej kopii (odczytana z magazynu obrazów). */
+  data: Buffer;
   mime: string;
   sha256: string;
   bytes: number;

@@ -68,11 +68,40 @@ interface EncryptedFile {
   data: string;
 }
 
+/** Miejsce przechowywania zaszyfrowanego tokenu: plik (tryb lokalny) albo baza (server-http). */
+export interface SecretBackend {
+  read(): Promise<string | null>;
+  write(value: string): Promise<void>;
+  clear(): Promise<boolean>;
+}
+
+export class FileSecret implements SecretBackend {
+  constructor(private readonly file: string) {}
+  async read(): Promise<string | null> {
+    return fs.existsSync(this.file) ? fs.readFileSync(this.file, 'utf8') : null;
+  }
+  async write(value: string): Promise<void> {
+    const tmp = `${this.file}.tmp`;
+    fs.writeFileSync(tmp, value, { mode: 0o600 });
+    fs.renameSync(tmp, this.file);
+  }
+  async clear(): Promise<boolean> {
+    const existed = fs.existsSync(this.file);
+    fs.rmSync(this.file, { force: true });
+    return existed;
+  }
+}
+
 export class TokenStore {
+  private readonly backend: SecretBackend;
+
+  /** `target` = ścieżka pliku (tryb lokalny) albo dowolny SecretBackend. */
   constructor(
-    private readonly file: string,
+    target: string | SecretBackend,
     private readonly keys: KeyProvider,
-  ) {}
+  ) {
+    this.backend = typeof target === 'string' ? new FileSecret(target) : target;
+  }
 
   async save(rec: TokenRecord): Promise<void> {
     const key = await this.keys.getKey(true);
@@ -81,14 +110,13 @@ export class TokenStore {
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     const data = Buffer.concat([cipher.update(JSON.stringify(rec), 'utf8'), cipher.final()]);
     const out: EncryptedFile = { v: 1, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') };
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(out), { mode: 0o600 });
-    fs.renameSync(tmp, this.file);
+    await this.backend.write(JSON.stringify(out));
   }
 
   async load(): Promise<TokenRecord | null> {
-    if (!fs.existsSync(this.file)) return null;
-    const enc = JSON.parse(fs.readFileSync(this.file, 'utf8')) as EncryptedFile;
+    const raw = await this.backend.read();
+    if (!raw) return null;
+    const enc = JSON.parse(raw) as EncryptedFile;
     const key = await this.keys.getKey(false);
     if (!key) throw new Error('Nie znaleziono klucza szyfrowania tokenów (Menedżer poświadczeń / LINKEDIN_MCP_ENC_KEY). Zaloguj się ponownie.');
     try {
@@ -114,9 +142,7 @@ export class TokenStore {
     };
   }
 
-  clear(): boolean {
-    const existed = fs.existsSync(this.file);
-    fs.rmSync(this.file, { force: true });
-    return existed;
+  clear(): Promise<boolean> {
+    return this.backend.clear();
   }
 }

@@ -1,0 +1,28 @@
+# Lokalne uruchomienie wariantu server-http (PostgreSQL + aplikacja) do testów, np. z MCP Inspector.
+# Uruchomienie:  docker compose up --build     Adres konektora: http://localhost:8080/mcp
+# Sekrety LinkedIn i klucz szyfrowania podaj w pliku .env.server (nie trafia do repozytorium).
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: linkedin
+      POSTGRES_PASSWORD: linkedin
+      POSTGRES_DB: linkedin_mcp
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linkedin -d linkedin_mcp"]
+      interval: 3s
+      retries: 20
+  app:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    ports: ["127.0.0.1:8080:8080"]
+    env_file: [.env.server]
+    environment:
+      DATABASE_URL: postgres://linkedin:linkedin@db:5432/linkedin_mcp
+      PUBLIC_BASE_URL: http://localhost:8080
+      LINKEDIN_MODE: ${LINKEDIN_MODE:-mock}
+volumes:
+  pgdata:

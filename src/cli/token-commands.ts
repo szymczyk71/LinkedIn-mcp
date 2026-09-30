@@ -56,7 +56,7 @@ export async function tokenImport(config: Config, args: string[]): Promise<Recor
   const user = await fetchUserInfo(config, token); // weryfikacja tokenu + identyfikator autora
   const store = new SqliteStore(config.paths.dbFile);
   try {
-    const saved = await saveLogin(config, store, { accessToken: token, expiresInSec: Math.round(days * 86_400), scopes }, user, 'import');
+    const saved = await saveLogin(createTokenStore(config), store, { accessToken: token, expiresInSec: Math.round(days * 86_400), scopes }, user, 'import');
     await new AuditLog(store, config.paths.auditLogFile).record('cli', 'token_import', 'ok', saved.personUrn, { expiresAt: saved.expiresAt, scopes });
     return {
       imported: true,
@@ -82,7 +82,7 @@ export async function tokenStatus(config: Config): Promise<Record<string, unknow
 }
 
 export async function tokenClear(config: Config): Promise<Record<string, unknown>> {
-  const removed = createTokenStore(config).clear();
+  const removed = await createTokenStore(config).clear();
   const store = new SqliteStore(config.paths.dbFile);
   try {
     await store.setAuthMeta('live', null);

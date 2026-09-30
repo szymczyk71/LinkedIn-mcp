@@ -15,7 +15,12 @@ export interface SchedulerRunner {
  * Bree uruchamia przebieg co `schedulerIntervalMin` minut, wyrównany do zegara (cron * /N).
  * Bree nie startuje zadania, które jeszcze trwa, więc przebiegi się nie nakładają.
  */
-export async function startScheduler(config: Config, log: Logger, onTick?: (r: TickResult) => void): Promise<SchedulerRunner> {
+export async function startScheduler(
+  config: Config,
+  log: Logger,
+  onTick?: (r: TickResult) => void,
+  jobFile: string = JOB_FILE,
+): Promise<SchedulerRunner> {
   let lastTick: TickResult | null = null;
   const bree = new Bree({
     root: false,
@@ -25,7 +30,7 @@ export async function startScheduler(config: Config, log: Logger, onTick?: (r: T
       warn: (...a: unknown[]) => log.warn('Bree', { detail: a.map(String).join(' ') }),
       error: (...a: unknown[]) => log.error('Bree', { detail: a.map(String).join(' ') }),
     } as unknown as Bree.BreeLogger,
-    jobs: [{ name: 'tick', path: JOB_FILE, cron: `*/${config.schedulerIntervalMin} * * * *` }],
+    jobs: [{ name: 'tick', path: jobFile, cron: `*/${config.schedulerIntervalMin} * * * *` }],
     workerMessageHandler: ({ message }: { message: unknown }) => {
       const m = message as { type?: string; result?: TickResult; error?: string };
       if (m?.type === 'tick' && m.result) {

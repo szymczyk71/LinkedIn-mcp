@@ -3,9 +3,7 @@ import type { CoreContext } from './index.js';
 import { LinkedInError } from './linkedin/client.js';
 import { silentLogger, type Logger } from './logger.js';
 import type { CanComment, Post, PostError } from './model.js';
-import { readPause } from './pause.js';
 import { decideComment } from './posts.js';
-import { verifyStagedImage } from './image.js';
 import { minutesBetween } from './time.js';
 import { addMinutes } from './util.js';
 
@@ -51,8 +49,8 @@ export class Scheduler {
     return this.ctx.clock.now().toISOString();
   }
 
-  private paused(): boolean {
-    return readPause(this.ctx.config.paths.pauseFlagFile).paused;
+  private async paused(): Promise<boolean> {
+    return (await this.ctx.pause.read()).paused;
   }
 
   /**
@@ -130,14 +128,14 @@ export class Scheduler {
       }
     }
 
-    r.paused = this.paused();
+    r.paused = await this.paused();
     if (r.paused) {
       if (toPublish.length) this.log.info('Pauza (PAUSE) - pomijam publikację', { waiting: toPublish.length });
       return r;
     }
 
     for (const p of toPublish) {
-      if (this.paused()) {
+      if (await this.paused()) {
         r.paused = true;
         return r;
       }
@@ -147,7 +145,7 @@ export class Scheduler {
     }
 
     for (const p of await store.findDueComments(this.nowIso())) {
-      if (this.paused()) {
+      if (await this.paused()) {
         r.paused = true;
         return r;
       }
@@ -184,7 +182,8 @@ export class Scheduler {
       return 'failed';
     }
 
-    if (claimed.image && !verifyStagedImage(claimed.image)) {
+    const imageData = claimed.image ? await this.ctx.images.read(claimed.image) : null;
+    if (claimed.image && !imageData) {
       const now = this.nowIso();
       const err: PostError = {
         code: 'image_missing',
@@ -203,7 +202,7 @@ export class Scheduler {
         text: claimed.text,
         idempotencyKey: claimed.idempotencyKey,
         ...(claimed.image
-          ? { image: { file: claimed.image.file, mime: claimed.image.mime, sha256: claimed.image.sha256, bytes: claimed.image.bytes, alt: claimed.image.alt } }
+          ? { image: { data: imageData!, mime: claimed.image.mime, sha256: claimed.image.sha256, bytes: claimed.image.bytes, alt: claimed.image.alt } }
           : {}),
       });
       const now = this.nowIso();

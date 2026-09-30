@@ -5,6 +5,7 @@ Rozmowa, redakcja i zatwierdzanie odbywają się w Claude Desktop. Serwer wykonu
 
 - Specyfikacja narzędzi: [docs/mcp-tools-contract.md](docs/mcp-tools-contract.md)
 - **Przewodnik użytkownika (jak z tego korzystać):** [docs/user-guide.md](docs/user-guide.md)
+- Wdrożenie w Azure: [docs/azure-deployment.md](docs/azure-deployment.md)
 - Wymagania projektu: [docs/build-prompt.md](docs/build-prompt.md)
 
 ## Jak to działa
@@ -18,7 +19,7 @@ Claude Desktop ──stdio──> mcp-stdio (nakładka) ──HTTP 127.0.0.1 + t
 
 - **worker** działa w tle niezależnie od Claude Desktop, przez cały czas zalogowania do Windows (po włączeniu autostartu).
 - **mcp-stdio** to cienka nakładka uruchamiana przez Claude Desktop. Gdy worker nie działa, narzędzia zwracają błąd z komendą uruchomienia.
-- **server-http** to wariant „wszystko w jednym” z transportem Streamable HTTP, pod późniejsze wdrożenie w Azure (etap 6).
+- **server-http** to wariant docelowy „wszystko w jednym” do Azure: MCP przez Streamable HTTP z OAuth (konektor w Claude), harmonogram i PostgreSQL. Wdrożenie opisuje [docs/azure-deployment.md](docs/azure-deployment.md).
 
 Zasady:
 - nie ma narzędzia do natychmiastowej publikacji, a termin musi być co najmniej 5 minut w przód;
@@ -208,10 +209,19 @@ Pliki w `%LOCALAPPDATA%\linkedin-mcp\`:
 - `worker-token`: lokalny token API;
 - `mock-*.json`: stan i scenariusz atrapy.
 
+## Wariant serwerowy (server-http)
+
+Docelowo aplikacja działa w Azure jako zdalny konektor MCP. Komputer nie musi być wtedy włączony w chwili publikacji, a zdjęcia wysyła się przez jednorazowy link.
+
+- Wdrożenie krok po kroku: [docs/azure-deployment.md](docs/azure-deployment.md).
+- Uruchomienie lokalne (PostgreSQL i aplikacja w Dockerze): `docker compose up --build`, adres `http://localhost:8080/mcp`. Sekrety podaj w pliku `.env.server`.
+- Uruchomienie bez Dockera: `npm run server-http` z ustawionymi `DATABASE_URL`, `PUBLIC_BASE_URL`, `LINKEDIN_MCP_ENC_KEY`, `LINKEDIN_CLIENT_ID` i `LINKEDIN_CLIENT_SECRET`.
+- Administracja: `npm run cli -- server status | pause | resume | owner-reset --yes` (wymaga `DATABASE_URL`).
+
 ## Testy i MCP Inspector
 
 ```powershell
-npm test                  # buduje dist/ i uruchamia wszystkie testy
+npm test                  # buduje dist/ i uruchamia wszystkie testy (testy PostgreSQL w Dockerze; bez Dockera są pomijane)
 npm run inspector         # MCP Inspector w przeglądarce (worker musi działać)
 npx -y @modelcontextprotocol/inspector --cli node dist/mcp-stdio/index.js --method tools/list
 ```
@@ -233,8 +243,10 @@ Przykładowe argumenty dla `linkedin_preview_series` w Inspectorze:
 src/core/          rdzeń: konfiguracja, model, baza (Store + SQLite), czas, harmonogram, serwis narzędzi, atrapa LinkedIn
 src/worker/        proces w tle: Bree, lokalne API, sterowanie start/stop
 src/mcp/           definicje narzędzi MCP (wspólne dla stdio i HTTP)
-src/mcp-stdio/     nakładka stdio dla Claude Desktop
-src/cli/           komendy: status, worker, autostart, claude-config, pause, mock
+src/mcp-stdio/     nakładka stdio dla Claude Desktop (wersja lokalna)
+src/server-http/   wariant serwerowy: HTTP + OAuth dla konektora, strona przesyłania zdjęć, harmonogram na PostgreSQL
+src/web/           wspólne strony HTML
+src/cli/           komendy: status, worker, autostart, claude-config, pause, token, server (administracja Azure), mock
 test/              testy (vitest)
 docs/              kontrakt narzędzi i wymagania
 ```

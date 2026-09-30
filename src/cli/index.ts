@@ -16,6 +16,7 @@ import {
 } from '../core/index.js';
 import { outLogFile, startWorkerDetached, stopWorker, tail, workerHealth } from '../worker/control.js';
 import { autostartFile, autostartInstalled, installAutostart, uninstallAutostart } from './autostart.js';
+import { serverCommand } from './server-commands.js';
 import { deleteLivePost, tokenClear, tokenImport, tokenStatus, tokenVerify } from './token-commands.js';
 import { SERVER_NAME, defaultClaudeConfigPath, findClaudeConfigCandidates, serverEntry, snippet, writeClaudeConfig } from './claude-config.js';
 
@@ -49,6 +50,9 @@ const HELP = `Użycie: npm run cli -- <komenda>   (albo skróty npm run ... poda
 
   pause [powód]               bezpiecznik: harmonogram niczego nie publikuje                 (npm run pause)
   resume                      wyłącz bezpiecznik                                             (npm run resume)
+
+  server status | pause [powód] | resume | owner-reset --yes
+                              administracja wariantu server-http (wymaga DATABASE_URL)
 
   mock show | reset | posts
   mock set op=tryb[:razy] ... np. mock set publish=timeout   mock set comment=forbidden:1
@@ -108,6 +112,10 @@ async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
+
+    case 'server':
+      print(await serverCommand(config, sub, rest));
+      return 0;
 
     case 'token': {
       const args = rest;

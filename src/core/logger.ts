@@ -14,11 +14,16 @@ export interface Logger {
  * Logger pisze na stderr (stdout zostaje wolny, co ma znaczenie dla transportu stdio)
  * i opcjonalnie do pliku. Szczegóły przechodzą przez redact().
  */
-export function createLogger(opts: { file?: string | null; level?: LogLevel; stderr?: boolean } = {}): Logger {
+export function createLogger(opts: { file?: string | null; level?: LogLevel; stderr?: boolean; json?: boolean } = {}): Logger {
   const order: LogLevel[] = ['debug', 'info', 'warn', 'error'];
   const min = order.indexOf(opts.level ?? 'info');
   const write = (level: LogLevel, msg: string, detail?: Record<string, unknown>) => {
     if (order.indexOf(level) < min) return;
+    if (opts.json) {
+      // Kontener: jedna linia JSON na stdout (Azure Monitor / Log Analytics). Pole "alert" służy do reguł alertów.
+      process.stdout.write(JSON.stringify({ time: new Date().toISOString(), level, msg, ...(detail ? redact(detail) : {}) }) + '\n');
+      return;
+    }
     const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} ${msg}${detail ? ' ' + JSON.stringify(redact(detail)) : ''}`;
     if (opts.stderr !== false) process.stderr.write(line + '\n');
     if (opts.file) {

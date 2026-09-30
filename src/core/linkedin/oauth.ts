@@ -99,7 +99,7 @@ export async function fetchUserInfo(config: Config, accessToken: string, fetchIm
 
 /** Zapisuje token (zaszyfrowany) i metadane profilu. Zwraca rekord bez ujawniania tokenu na zewnątrz. */
 export async function saveLogin(
-  config: Config,
+  tokens: TokenStore,
   store: Store,
   token: { accessToken: string; expiresInSec: number; refreshToken?: string | null; refreshExpiresInSec?: number | null; scopes: string[] },
   user: UserInfo,
@@ -117,7 +117,7 @@ export async function saveLogin(
     obtainedAt: now.toISOString(),
     source,
   };
-  await createTokenStore(config).save(rec);
+  await tokens.save(rec);
   const prev = await store.getAuthMeta('live');
   const samePerson = prev?.personUrn === rec.personUrn;
   await store.setAuthMeta('live', {

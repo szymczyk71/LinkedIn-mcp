@@ -88,25 +88,59 @@ export function stageImage(sourcePath: string, imagesDir: string, maxBytes: numb
   }
   if (!stat.isFile()) throw new ImageError('image_not_file', `To nie jest plik: ${p}`);
   if (stat.size === 0) throw new ImageError('image_empty', `Plik obrazu jest pusty: ${p}`);
-  if (stat.size > maxBytes) {
-    throw new ImageError('image_too_large', `Obraz ma ${(stat.size / 1_048_576).toFixed(1)} MB - limit to ${(maxBytes / 1_048_576).toFixed(0)} MB.`);
-  }
+  if (stat.size > maxBytes) throw tooLarge(stat.size, maxBytes);
   const buf = fs.readFileSync(p);
-  const det = detectImage(buf);
-  if (!det) throw new ImageError('image_unsupported', `Nieobsługiwany format pliku ${path.basename(p)} - dozwolone: JPG, PNG, GIF.`);
-
-  const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
-  fs.mkdirSync(imagesDir, { recursive: true });
-  const file = path.join(imagesDir, `${sha256}.${det.ext}`);
-  if (!fs.existsSync(file)) fs.writeFileSync(file, buf);
-  return { file, originalName: path.basename(p), sha256, mime: det.mime, bytes: buf.length, width: det.width, height: det.height, alt };
+  return new FileImageRepo(imagesDir).putSync(buf, path.basename(p), maxBytes, alt);
 }
 
-/** Czy zatwierdzona kopia nadal istnieje i ma tę samą treść. */
-export function verifyStagedImage(img: PostImage): boolean {
-  try {
-    return crypto.createHash('sha256').update(fs.readFileSync(img.file)).digest('hex') === img.sha256;
-  } catch {
-    return false;
+function tooLarge(size: number, maxBytes: number): ImageError {
+  return new ImageError('image_too_large', `Obraz ma ${(size / 1_048_576).toFixed(1)} MB - limit to ${(maxBytes / 1_048_576).toFixed(0)} MB.`);
+}
+
+/** Wspólna walidacja zawartości (plik z dysku albo przesłany przez stronę). */
+export function validateImage(buf: Buffer, originalName: string, maxBytes: number): DetectedImage & { sha256: string } {
+  if (buf.length === 0) throw new ImageError('image_empty', `Plik obrazu jest pusty: ${originalName}`);
+  if (buf.length > maxBytes) throw tooLarge(buf.length, maxBytes);
+  const det = detectImage(buf);
+  if (!det) throw new ImageError('image_unsupported', `Nieobsługiwany format pliku ${originalName} - dozwolone: JPG, PNG, GIF.`);
+  return { ...det, sha256: crypto.createHash('sha256').update(buf).digest('hex') };
+}
+
+export const sha256Hex = (buf: Buffer): string => crypto.createHash('sha256').update(buf).digest('hex');
+
+/**
+ * Magazyn zatwierdzonych kopii obrazów. Plikowy (tryb lokalny, katalog danych) albo w bazie (server-http, PostgreSQL).
+ * `PostImage.file` to odnośnik do kopii: ścieżka pliku albo "db:<sha256>".
+ */
+export interface ImageRepo {
+  readonly kind: 'file' | 'db';
+  put(buf: Buffer, originalName: string, maxBytes: number, alt: string): Promise<PostImage>;
+  /** Treść kopii albo null, gdy zniknęła lub nie zgadza się suma kontrolna. */
+  read(img: PostImage): Promise<Buffer | null>;
+}
+
+export class FileImageRepo implements ImageRepo {
+  readonly kind = 'file' as const;
+  constructor(private readonly dir: string) {}
+
+  putSync(buf: Buffer, originalName: string, maxBytes: number, alt: string): PostImage {
+    const v = validateImage(buf, originalName, maxBytes);
+    fs.mkdirSync(this.dir, { recursive: true });
+    const file = path.join(this.dir, `${v.sha256}.${v.ext}`);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, buf);
+    return { file, originalName, sha256: v.sha256, mime: v.mime, bytes: buf.length, width: v.width, height: v.height, alt };
+  }
+
+  async put(buf: Buffer, originalName: string, maxBytes: number, alt: string): Promise<PostImage> {
+    return this.putSync(buf, originalName, maxBytes, alt);
+  }
+
+  async read(img: PostImage): Promise<Buffer | null> {
+    try {
+      const buf = fs.readFileSync(img.file);
+      return sha256Hex(buf) === img.sha256 ? buf : null;
+    } catch {
+      return null;
+    }
   }
 }

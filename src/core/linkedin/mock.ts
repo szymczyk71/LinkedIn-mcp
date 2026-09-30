@@ -117,7 +117,7 @@ export class MockLinkedIn implements LinkedInClient {
     if (input.image) {
       this.calls.uploadImage++;
       const imageMode = this.takeMode('image', s);
-      if (!fs.existsSync(input.image.file)) throw new LinkedInError('rejected', 'Atrapa: brak pliku obrazu do wysłania.');
+      if (!input.image.data?.length) throw new LinkedInError('rejected', 'Atrapa: brak danych obrazu do wysłania.');
       if (imageMode === 'reject') throw new LinkedInError('rejected', 'Atrapa: LinkedIn odrzucił obraz (400).', 400);
       if (imageMode === 'network') throw new LinkedInError('network', 'Atrapa: błąd połączenia przy wysyłaniu obrazu.');
       imageUrn = `urn:li:image:${newId('mockimg')}`;

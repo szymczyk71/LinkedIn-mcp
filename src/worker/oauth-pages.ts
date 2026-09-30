@@ -67,7 +67,7 @@ export class OAuthPages {
       const scopes = (tok.scope ?? this.ctx.config.linkedin.scopes.join(' ')).split(/[\s,]+/).filter(Boolean);
       const user = await fetchUserInfo(this.ctx.config, tok.access_token, this.fetchImpl);
       const saved = await saveLogin(
-        this.ctx.config,
+        this.ctx.tokens,
         this.ctx.store,
         { accessToken: tok.access_token, expiresInSec: tok.expires_in, refreshToken: tok.refresh_token, refreshExpiresInSec: tok.refresh_token_expires_in, scopes },
         user,
