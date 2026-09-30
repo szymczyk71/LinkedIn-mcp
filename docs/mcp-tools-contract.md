@@ -1,0 +1,113 @@
+# Kontrakt narzędzi serwera MCP LinkedIn
+
+Ten dokument jest jednocześnie instrukcją dla skilla (jak wywoływać narzędzia) i specyfikacją dla osoby lub narzędzia budującego serwer (co serwer musi zapewnić). Nazwy narzędzi i pola są częścią kontraktu. Jeśli serwer je zmienia, zaktualizuj ten plik.
+
+## Zasady projektowe
+
+- Serwer publikuje na LinkedIn wyłącznie przez oficjalne API, z profilu osobistego zalogowanego użytkownika.
+- Nie ma narzędzia do natychmiastowej publikacji. Każdy post ma termin co najmniej 5 minut w przyszłości względem chwili zatwierdzenia.
+- Zapis do kolejki następuje w dwóch krokach: **podgląd**, a potem **zatwierdzenie na podstawie identyfikatora planu**. Zatwierdzenie zapisuje dokładnie te treści, które zostały pokazane w podglądzie.
+- Logowanie do LinkedIn (OAuth) odbywa się na stronie serwera w przeglądarce, nigdy przez narzędzia MCP. Tokeny nie są zwracane przez żadne narzędzie.
+- Wszystkie narzędzia zwracają błędy w postaci czytelnego opisu i kodu, bez ujawniania sekretów.
+- Serwer zapisuje log każdej operacji (kto, co, kiedy, wynik).
+
+## Format czasu
+
+Terminy w danych wejściowych: tekst w formacie ISO 8601 bez strefy, np. `2026-11-06T08:00:00`, interpretowany w strefie podanej w polu `timezone` (domyślnie `Europe/Warsaw`, z uwzględnieniem zmiany czasu). W odpowiedziach serwer zwraca zarówno czas lokalny, jak i UTC.
+
+## Narzędzia
+
+### `linkedin_auth_status`
+
+Sprawdza połączenie z LinkedIn. Bez parametrów.
+
+Zwraca: `connected` (tak lub nie), `profile_name`, `profile_url`, `expires_at`, `days_left`, `login_url` (adres strony logowania na serwerze), `can_post` (tak lub nie), `can_comment` (tak, nie lub nieznane).
+
+Kodowanie w JSON: `connected` i `can_post` to wartości logiczne (`true`/`false`), a `can_comment` przyjmuje `"yes"`, `"no"` lub `"unknown"`. Do pierwszej próby dodania komentarza ma wartość `"unknown"`, potem zależy od wyniku tej próby. `expires_at` jest w UTC (ISO 8601), a `days_left` to liczba całkowitych dni do wygaśnięcia.
+
+### `linkedin_preview_series`
+
+Waliduje serię i zwraca podgląd. **Niczego nie zapisuje do kolejki.**
+
+Parametry:
+- `timezone` (opcjonalnie, domyślnie `Europe/Warsaw`)
+- `posts` (lista), a w każdym elemencie:
+  - `text` - treść posta, dokładnie taka, jaka ma się ukazać
+  - `publish_at` - termin publikacji (czas lokalny)
+  - `comment_text` - komentarz (może być pusty, wtedy brak komentarza)
+  - `link_mode` - `none` (komentarz bez linku) lub `later` (w komentarzu jest symbol `[LINK]`, link poda użytkownik)
+  - `comment_text_no_link` - zatwierdzona wersja komentarza bez linku, używana gdy link nie zostanie podany na czas
+  - `if_no_link` - `post_without_link` lub `skip`
+  - `comment_delay_min` - opóźnienie komentarza w minutach (domyślnie 10)
+
+Zwraca: `plan_id`, `expires_in_min` (ważność planu), `posts` (dla każdego: numer, `publish_at_local`, `publish_at_utc`, liczba znaków, `warnings`, `errors`) oraz podsumowanie.
+
+Walidacje po stronie serwera: termin co najmniej 5 minut w przyszłości, długość posta (limit około 3000 znaków), duplikat treści względem kolejki i opublikowanych postów, kolizje terminów (dwa posty w tej samej minucie), symbol `[LINK]` wymaga `link_mode` równego `later`, `later` wymaga wersji `comment_text_no_link` lub `if_no_link` równego `skip`.
+
+Serwer sam zamienia treść na format wymagany przez LinkedIn, w tym poprawnie zapisuje znaki specjalne, i nie zmienia sensu treści.
+
+### `linkedin_commit_series`
+
+Zatwierdza serię z podglądu.
+
+Parametry: `plan_id`.
+
+Zwraca: `series_id` oraz listę postów z `id`, `status`, `publish_at_local`.
+
+Wymaga ważnego `plan_id`. Jeśli plan wygasł lub został już zatwierdzony, zwraca błąd. Zatwierdzenie tego samego planu drugi raz nie tworzy duplikatów.
+
+### `linkedin_list_queue`
+
+Pokazuje kolejkę.
+
+Parametry (wszystkie opcjonalne): `status`, `series_id`, `from`, `to`.
+
+Zwraca listę postów: `id`, `series_id`, początek treści, `publish_at_local`, `status`, `comment_status`, `post_url` (po publikacji), `last_error`.
+
+### `linkedin_get_post`
+
+Parametry: `id`. Zwraca pełne dane jednego posta wraz z historią zdarzeń.
+
+### `linkedin_update_post`
+
+Zmienia treść, termin lub komentarz posta **przed publikacją**.
+
+Parametry: `id` oraz pola do zmiany (`text`, `publish_at`, `comment_text`, `comment_text_no_link`, `if_no_link`). Zwraca zaktualizowany post. Odrzuca zmianę, jeśli post ma już status inny niż `scheduled` lub `missed`, albo termin jest bliższy niż 5 minut.
+
+Post ze statusem `missed` można przywrócić do harmonogramu, podając nowy `publish_at` (co najmniej 5 minut w przyszłości). Po takiej zmianie wraca do statusu `scheduled`. Zmiana samej treści posta `missed` bez nowego terminu jest odrzucana.
+
+### `linkedin_cancel_post`
+
+Parametry: `id`. Anuluje zaplanowany post (i jego komentarz). Działa dla statusów `scheduled`, `missed` i `failed`. Odrzuca, jeśli post jest już publikowany lub opublikowany.
+
+### `linkedin_set_comment_link`
+
+Uzupełnia link w komentarzu z trybem `later`.
+
+Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce `[LINK]`. Odrzuca adres niebędący poprawnym URL-em.
+
+## Statusy posta
+
+- `scheduled` - zatwierdzony, czeka na termin
+- `publishing` - trwa publikacja
+- `published` - opublikowany
+- `failed` - publikacja się nie udała (szczegóły w `last_error`), serwer nie ponawia automatycznie po błędzie niejednoznacznym, żeby nie zdublować posta
+- `canceled` - anulowany
+- `missed` - termin minął, gdy serwer nie działał (np. wyłączony komputer), a spóźnienie przekroczyło próg `MISSED_GRACE_MIN` (domyślnie 60 minut). Serwer takiego posta **nie publikuje**. Post jest widoczny w kolejce. Można mu nadać nowy termin przez `linkedin_update_post` albo go anulować. Posty spóźnione mniej niż o próg są publikowane od razu po starcie serwera.
+
+## Statusy komentarza
+
+- `none` - brak komentarza
+- `waiting` - czeka na termin po publikacji
+- `waiting_link` - czeka na link (tryb `later`)
+- `done` - dodany
+- `skipped` - pominięty (zgodnie z `if_no_link` lub brak uprawnień)
+- `failed` - nie udało się dodać
+
+## Wymagania niefunkcjonalne dla serwera
+
+- Publiczny adres HTTPS i transport strumieniowy HTTP (Streamable HTTP).
+- Uwierzytelnianie punktu końcowego MCP (nie zostawiaj go otwartego w produkcji) oraz ograniczenie liczby wywołań.
+- Harmonogram odporny na restart: stan w bazie, blokada wiersza przy publikacji, jedna publikacja na wiersz (idempotentnie).
+- Alert przed wygaśnięciem logowania LinkedIn (około 60 dni) i po błędzie publikacji.
+- Przechowywanie tokenów i sekretów w bezpiecznym magazynie (np. Key Vault), nigdy w kodzie ani w repozytorium.
