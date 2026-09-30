@@ -18,7 +18,17 @@
     "resume": "node dist/cli/index.js resume",
     "worker": "node dist/worker/index.js",
     "mcp:stdio": "node dist/mcp-stdio/index.js",
-    "inspector": "npx -y @modelcontextprotocol/inspector node dist/mcp-stdio/index.js"
+    "inspector": "npx -y @modelcontextprotocol/inspector node dist/mcp-stdio/index.js",
+    "status": "node dist/cli/index.js status",
+    "worker:start": "node dist/cli/index.js worker start",
+    "worker:stop": "node dist/cli/index.js worker stop",
+    "worker:restart": "node dist/cli/index.js worker restart",
+    "worker:status": "node dist/cli/index.js worker status",
+    "worker:logs": "node dist/cli/index.js worker logs",
+    "autostart:install": "node dist/cli/index.js autostart install",
+    "autostart:uninstall": "node dist/cli/index.js autostart uninstall",
+    "claude-config": "node dist/cli/index.js claude-config",
+    "setup": "npm install && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",

@@ -17,7 +17,7 @@ const LIVE_BANNER = `
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const log = createLogger({ file: config.paths.workerLogFile });
+  const log = createLogger({ file: config.paths.workerLogFile, stderr: process.env.LINKEDIN_MCP_DETACHED !== '1' });
   const core = createCore(config);
   const lock = InstanceLock.acquire(config.paths.dataDir);
 
@@ -28,9 +28,10 @@ async function main(): Promise<void> {
   await core.audit.record('system', 'worker_start', 'ok', null, { mode: config.mode, ...recovery });
 
   const token = ensureWorkerToken(config.paths.workerTokenFile);
+  let shutdownRequested: () => void = () => {};
   let api;
   try {
-    api = await startApi(core, token, log);
+    api = await startApi(core, token, log, config.workerPort, () => shutdownRequested());
   } catch (e) {
     lock.release();
     const code = (e as NodeJS.ErrnoException).code;
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
     lock.release();
     process.exit(0);
   };
+  shutdownRequested = () => void shutdown('api');
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGBREAK', () => void shutdown('SIGBREAK'));

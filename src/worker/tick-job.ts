@@ -6,7 +6,7 @@ import { parentPort } from 'node:worker_threads';
 import { Scheduler, createCore, createLogger, loadConfig } from '../core/index.js';
 
 const config = loadConfig();
-const log = createLogger({ file: config.paths.workerLogFile });
+const log = createLogger({ file: config.paths.workerLogFile, stderr: process.env.LINKEDIN_MCP_DETACHED !== '1' });
 const core = createCore(config);
 
 try {

@@ -17,10 +17,17 @@ export interface ApiServer {
  * Lokalne API workera, wyłącznie na 127.0.0.1:
  *   GET  /api/health              - bez tokenu, bez danych wrażliwych
  *   POST /api/tools/<nazwa>       - wymaga Authorization: Bearer <token z pliku worker-token>
+ *   POST /api/admin/shutdown      - łagodne zatrzymanie (z tokenem)
  *   GET  /oauth/start, /oauth/callback - logowanie LinkedIn (etap 5)
  * Nagłówek Host musi wskazywać na 127.0.0.1/localhost (ochrona przed DNS rebinding).
  */
-export async function startApi(ctx: CoreContext, token: string, log: Logger, port = ctx.config.workerPort): Promise<ApiServer> {
+export async function startApi(
+  ctx: CoreContext,
+  token: string,
+  log: Logger,
+  port = ctx.config.workerPort,
+  onShutdown?: () => void,
+): Promise<ApiServer> {
   const service = new LinkedInService(ctx, 'mcp');
 
   const server = http.createServer((req, res) => {
@@ -42,6 +49,15 @@ export async function startApi(ctx: CoreContext, token: string, log: Logger, por
     if (url.pathname === '/oauth/start' || url.pathname === '/oauth/callback') {
       res.writeHead(501, { 'content-type': 'text/html; charset=utf-8' });
       return res.end('<!doctype html><meta charset="utf-8"><h1>Logowanie LinkedIn</h1><p>Logowanie OAuth zostanie włączone w etapie 5 (tryb live). W trybie atrapy nie jest potrzebne.</p>');
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/admin/shutdown') {
+      if (!authorized(req.headers.authorization, token)) {
+        return send(res, 401, { ok: false, error: { code: 'unauthorized', message: 'Brak lub niepoprawny token workera.' } });
+      }
+      send(res, 200, { ok: true, message: 'Worker zatrzymuje się.' });
+      setTimeout(() => onShutdown?.(), 50);
+      return;
     }
 
     const m = /^\/api\/tools\/([a-z_]+)$/.exec(url.pathname);

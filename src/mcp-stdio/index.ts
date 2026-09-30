@@ -13,7 +13,7 @@ import { registerTools, type ToolInvoker, type ToolOutcome } from '../mcp/tools.
 const VERSION = '0.3.0';
 
 function startHint(): string {
-  return `Uruchom worker w PowerShell: cd "${PACKAGE_ROOT}"; npm run worker`;
+  return `Uruchom worker w PowerShell: cd "${PACKAGE_ROOT}"; npm run worker:start (w tle) albo npm run worker (na pierwszym planie).`;
 }
 
 export function createWorkerInvoker(getConfig: () => Config): ToolInvoker {
