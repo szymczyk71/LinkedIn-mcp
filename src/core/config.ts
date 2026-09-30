@@ -37,6 +37,9 @@ const EnvSchema = z.object({
   PLAN_TTL_MIN: intFromEnv(30, 1, 24 * 60),
   POST_MAX_CHARS: intFromEnv(3000, 1, 100_000),
   COMMENT_DELAY_DEFAULT_MIN: intFromEnv(10, 0, 24 * 60),
+  SCHEDULER_INTERVAL_MIN: intFromEnv(5, 1, 30).refine((n) => 60 % n === 0, {
+    message: 'musi być dzielnikiem 60 (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)',
+  }),
   LINKEDIN_CLIENT_ID: optionalString,
   LINKEDIN_CLIENT_SECRET: optionalString,
   LINKEDIN_REDIRECT_URI: optionalString,
@@ -71,6 +74,8 @@ export interface Config {
   planTtlMin: number;
   postMaxChars: number;
   commentDelayDefaultMin: number;
+  /** Co ile minut działa przebieg harmonogramu (wyrównany do zegara: :00, :05, ...). */
+  schedulerIntervalMin: number;
   linkedin: {
     clientId?: string;
     clientSecret?: string;
@@ -151,6 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
     planTtlMin: e.PLAN_TTL_MIN,
     postMaxChars: e.POST_MAX_CHARS,
     commentDelayDefaultMin: e.COMMENT_DELAY_DEFAULT_MIN,
+    schedulerIntervalMin: e.SCHEDULER_INTERVAL_MIN,
     linkedin: {
       clientId: e.LINKEDIN_CLIENT_ID,
       clientSecret: e.LINKEDIN_CLIENT_SECRET,
@@ -188,8 +194,9 @@ export function describeConfig(c: Config): Record<string, unknown> {
     planTtlMin: c.planTtlMin,
     postMaxChars: c.postMaxChars,
     commentDelayDefaultMin: c.commentDelayDefaultMin,
+    schedulerIntervalMin: c.schedulerIntervalMin,
     linkedinClientConfigured: Boolean(c.linkedin.clientId && c.linkedin.clientSecret),
     redirectUri: c.linkedin.redirectUri,
-    encKeySource: c.encKeyFromEnv ? 'env' : 'windows-credential-manager',
+    encryptionKeyStore: c.encKeyFromEnv ? 'env' : 'windows-credential-manager',
   };
 }

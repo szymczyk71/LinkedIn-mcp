@@ -35,6 +35,7 @@ export type PostPatch = Partial<
     | 'commentUrl'
     | 'commentStatus'
     | 'commentDueUtc'
+    | 'commentClaimedAt'
     | 'linkedinPostUrn'
     | 'postUrl'
     | 'linkedinCommentUrn'
@@ -105,8 +106,10 @@ export interface Store {
 
   /** Czy istnieje post (poza anulowanymi) o tym hashu treści. */
   findByTextHash(hash: string, excludeId?: string): Promise<Post[]>;
-  /** Aktywne posty (scheduled/publishing/missed) z terminem w tej samej minucie UTC. */
-  findInSameMinute(publishAtUtc: string, excludeId?: string): Promise<Post[]>;
+  /** Aktywne posty (scheduled/publishing/missed) z terminem w oknie (startExclusive, endInclusive]. */
+  findInWindow(startExclusive: string, endInclusive: string, excludeId?: string): Promise<Post[]>;
+  /** Opublikowane posty, których komentarz został rozpoczęty (claim), ale nie zakończony. */
+  findClaimedComments(): Promise<Post[]>;
 
   addEvent(postId: string, type: string, detail: Record<string, unknown> | null, atUtc: string): Promise<void>;
   getEvents(postId: string): Promise<PostEvent[]>;

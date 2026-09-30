@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, type Config, type NewPost, type PlannedPost } from '../src/core/index.js';
+import { newPostFromPlanned } from '../src/core/posts.js';
 import { newId, textHash } from '../src/core/util.js';
 
 export function tmpDataDir(): string {
@@ -28,20 +29,5 @@ export function plannedPost(seq: number, publishAtUtc: string, text = `Post test
 }
 
 export function toNewPost(p: PlannedPost, seriesId: string): NewPost {
-  return {
-    ...p,
-    id: newId('post'),
-    seriesId,
-    status: 'scheduled',
-    commentUrl: null,
-    commentStatus: p.commentText ? 'waiting' : 'none',
-    commentDueUtc: null,
-    idempotencyKey: newId('idem'),
-    linkedinPostUrn: null,
-    postUrl: null,
-    linkedinCommentUrn: null,
-    publishedAtUtc: null,
-    lastError: null,
-    commentError: null,
-  };
+  return newPostFromPlanned(p, seriesId);
 }

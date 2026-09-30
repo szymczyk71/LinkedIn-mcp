@@ -42,7 +42,9 @@ Parametry:
 
 Zwraca: `plan_id`, `expires_in_min` (ważność planu), `posts` (dla każdego: numer, `publish_at_local`, `publish_at_utc`, liczba znaków, `warnings`, `errors`) oraz podsumowanie.
 
-Walidacje po stronie serwera: termin co najmniej 5 minut w przyszłości, długość posta (limit około 3000 znaków), duplikat treści względem kolejki i opublikowanych postów, kolizje terminów (dwa posty w tej samej minucie), symbol `[LINK]` wymaga `link_mode` równego `later`, `later` wymaga wersji `comment_text_no_link` lub `if_no_link` równego `skip`.
+Walidacje po stronie serwera: termin co najmniej 5 minut w przyszłości, długość posta (limit około 3000 znaków), duplikat treści względem kolejki i opublikowanych postów, kolizje terminów, symbol `[LINK]` wymaga `link_mode` równego `later`, `later` wymaga wersji `comment_text_no_link` lub `if_no_link` równego `skip`.
+
+Kolizja terminów to dwa posty, które trafią do tego samego przebiegu harmonogramu (patrz „Harmonogram”). Serwer zwraca ją jako **ostrzeżenie** w `warnings`, a nie jako błąd. Posty z tego samego przebiegu wychodzą po kolei, w kolejności terminów. Ostrzeżenie dostaje też termin, który nie wypada na pełnym przebiegu, i wtedy podaje faktyczną godzinę publikacji.
 
 Serwer sam zamienia treść na format wymagany przez LinkedIn, w tym poprawnie zapisuje znaki specjalne, i nie zmienia sensu treści.
 
@@ -86,6 +88,15 @@ Uzupełnia link w komentarzu z trybem `later`.
 
 Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce `[LINK]`. Odrzuca adres niebędący poprawnym URL-em.
 
+## Harmonogram
+
+- Przebieg harmonogramu działa co `SCHEDULER_INTERVAL_MIN` minut (domyślnie 5) i jest wyrównany do zegara (:00, :05, :10…). Pierwszy przebieg rusza od razu po starcie serwera.
+- Post wychodzi w pierwszym przebiegu o godzinie równej terminowi lub późniejszej. Termin 08:00 oznacza publikację o 08:00, a termin 08:02 publikację o 08:05. Tak samo wyrównywany jest termin komentarza (publikacja + `comment_delay_min`).
+- Zmiana czasu: godzina podwójna jesienią (np. 02:30 w dniu przejścia na czas zimowy) oznacza jej pierwsze wystąpienie, czyli czas letni, i daje ostrzeżenie. Godzina nieistniejąca wiosną (np. 02:30 w dniu przejścia na czas letni) daje błąd `nonexistent_local_time`.
+- Po błędzie niejednoznacznym, czyli timeoucie po wysłaniu, zerwanym połączeniu albo przerwaniu przez restart, serwer niczego nie ponawia automatycznie. Nie ponawia też po błędzie jednoznacznym: post dostaje status `failed`, a ponowienie wymaga decyzji użytkownika.
+- Komentarz, którego termin minął o co najmniej `MISSED_GRACE_MIN` minut (serwer nie działał), jest pomijany: status komentarza `skipped`, kod `comment_missed`.
+- Przy bezpieczniku `PAUSE` harmonogram nie publikuje postów ani komentarzy. Polityka `missed` nadal działa.
+
 ## Statusy posta
 
 - `scheduled` - zatwierdzony, czeka na termin
@@ -101,7 +112,7 @@ Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce 
 - `waiting` - czeka na termin po publikacji
 - `waiting_link` - czeka na link (tryb `later`)
 - `done` - dodany
-- `skipped` - pominięty (zgodnie z `if_no_link` lub brak uprawnień)
+- `skipped` - pominięty (zgodnie z `if_no_link`, brak uprawnień, post nieopublikowany albo termin komentarza minął, gdy serwer nie działał)
 - `failed` - nie udało się dodać
 
 ## Wymagania niefunkcjonalne dla serwera

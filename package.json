@@ -15,7 +15,8 @@
     "cli": "node dist/cli/index.js",
     "doctor": "node dist/cli/index.js doctor",
     "pause": "node dist/cli/index.js pause",
-    "resume": "node dist/cli/index.js resume"
+    "resume": "node dist/cli/index.js resume",
+    "worker": "node dist/worker/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",

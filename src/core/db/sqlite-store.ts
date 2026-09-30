@@ -93,6 +93,10 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  // 2: znacznik rozpoczętego komentarza
+  `
+  ALTER TABLE posts ADD COLUMN comment_claimed_at TEXT;
+  `,
 ];
 
 /** Mapowanie pól Post (camelCase) na kolumny. Pola JSON obsługiwane osobno. */
@@ -110,6 +114,7 @@ const POST_COLUMNS: Record<keyof PostPatch, string> = {
   commentUrl: 'comment_url',
   commentStatus: 'comment_status',
   commentDueUtc: 'comment_due_utc',
+  commentClaimedAt: 'comment_claimed_at',
   linkedinPostUrn: 'linkedin_post_urn',
   postUrl: 'post_url',
   linkedinCommentUrn: 'linkedin_comment_urn',
@@ -143,6 +148,7 @@ function rowToPost(r: Row): Post {
     commentUrl: (r.comment_url as string | null) ?? null,
     commentStatus: r.comment_status as Post['commentStatus'],
     commentDueUtc: (r.comment_due_utc as string | null) ?? null,
+    commentClaimedAt: (r.comment_claimed_at as string | null) ?? null,
     idempotencyKey: r.idempotency_key as string,
     linkedinPostUrn: (r.linkedin_post_urn as string | null) ?? null,
     postUrl: (r.post_url as string | null) ?? null,
@@ -165,14 +171,6 @@ function rowToPlan(r: Row): Plan {
     committedSeriesId: (r.committed_series_id as string | null) ?? null,
     committedAt: (r.committed_at as string | null) ?? null,
   };
-}
-
-function minuteBounds(iso: string): [string, string] {
-  const d = new Date(iso);
-  d.setUTCSeconds(0, 0);
-  const start = d.toISOString();
-  d.setUTCMinutes(d.getUTCMinutes() + 1);
-  return [start, d.toISOString()];
 }
 
 export class SqliteStore implements Store {
@@ -236,11 +234,11 @@ export class SqliteStore implements Store {
       this.db.prepare('INSERT INTO series (id, plan_id, created_at) VALUES (?, ?, ?)').run(seriesId, planId, nowUtc);
       const insert = this.db.prepare(
         `INSERT INTO posts (id, series_id, seq, text, text_hash, publish_at_utc, timezone, status, comment_text, link_mode,
-           comment_text_no_link, if_no_link, comment_delay_min, comment_url, comment_status, comment_due_utc, idempotency_key,
+           comment_text_no_link, if_no_link, comment_delay_min, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
            linkedin_post_urn, post_url, linkedin_comment_urn, published_at_utc, last_error_json, comment_error_json,
            version, created_at, updated_at)
          VALUES (@id, @seriesId, @seq, @text, @textHash, @publishAtUtc, @timezone, @status, @commentText, @linkMode,
-           @commentTextNoLink, @ifNoLink, @commentDelayMin, @commentUrl, @commentStatus, @commentDueUtc, @idempotencyKey,
+           @commentTextNoLink, @ifNoLink, @commentDelayMin, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
            @linkedinPostUrn, @postUrl, @linkedinCommentUrn, @publishedAtUtc, @lastError, @commentError,
            1, @now, @now)`,
       );
@@ -345,7 +343,8 @@ export class SqliteStore implements Store {
       this.db
         .prepare(
           `SELECT * FROM posts WHERE status = 'published' AND comment_status IN ('waiting','waiting_link')
-           AND comment_due_utc IS NOT NULL AND comment_due_utc <= ? ORDER BY comment_due_utc`,
+           AND comment_claimed_at IS NULL AND comment_due_utc IS NOT NULL AND comment_due_utc <= ?
+           ORDER BY comment_due_utc`,
         )
         .all(nowUtc) as Row[]
     ).map(rowToPost);
@@ -359,15 +358,25 @@ export class SqliteStore implements Store {
     ).map(rowToPost);
   }
 
-  async findInSameMinute(publishAtUtc: string, excludeId?: string): Promise<Post[]> {
-    const [start, end] = minuteBounds(publishAtUtc);
+  async findInWindow(startExclusive: string, endInclusive: string, excludeId?: string): Promise<Post[]> {
     return (
       this.db
         .prepare(
           `SELECT * FROM posts WHERE status IN ('scheduled','publishing','missed')
-           AND publish_at_utc >= ? AND publish_at_utc < ? AND id <> ?`,
+           AND publish_at_utc > ? AND publish_at_utc <= ? AND id <> ? ORDER BY publish_at_utc`,
         )
-        .all(start, end, excludeId ?? '') as Row[]
+        .all(startExclusive, endInclusive, excludeId ?? '') as Row[]
+    ).map(rowToPost);
+  }
+
+  async findClaimedComments(): Promise<Post[]> {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM posts WHERE status = 'published' AND comment_status IN ('waiting','waiting_link')
+           AND comment_claimed_at IS NOT NULL`,
+        )
+        .all() as Row[]
     ).map(rowToPost);
   }
 

@@ -96,15 +96,15 @@ describe('SqliteStore', () => {
     expect(await s.listPosts({ status: ['failed', 'scheduled'] })).toHaveLength(2);
   });
 
-  it('findDuePosts, findInSameMinute i findByTextHash', async () => {
+  it('findDuePosts, findInWindow i findByTextHash', async () => {
     const s = open();
     const p = plan([plannedPost(1, '2026-10-01T09:50:00.000Z', 'Ten sam tekst'), plannedPost(2, '2026-10-02T06:00:30.000Z')]);
     await s.savePlan(p);
     const { posts } = await s.commitPlan(p.id, NOW, (pl, sid) => pl.posts.map((x) => toNewPost(x, sid)), newId('ser'));
     expect((await s.findDuePosts(NOW)).map((x) => x.id)).toEqual([posts[0]!.id]);
-    expect(await s.findInSameMinute('2026-10-02T06:00:00.000Z')).toHaveLength(1);
-    expect(await s.findInSameMinute('2026-10-02T06:01:00.000Z')).toHaveLength(0);
-    expect(await s.findInSameMinute('2026-10-02T06:00:00.000Z', posts[1]!.id)).toHaveLength(0);
+    expect(await s.findInWindow('2026-10-02T06:00:00.000Z', '2026-10-02T06:05:00.000Z')).toHaveLength(1);
+    expect(await s.findInWindow('2026-10-02T06:00:30.000Z', '2026-10-02T06:05:00.000Z')).toHaveLength(0);
+    expect(await s.findInWindow('2026-10-02T06:00:00.000Z', '2026-10-02T06:05:00.000Z', posts[1]!.id)).toHaveLength(0);
     expect(await s.findByTextHash(posts[0]!.textHash)).toHaveLength(1);
     await s.transitionPost(posts[0]!.id, ['scheduled'], { status: 'canceled' }, NOW);
     expect(await s.findByTextHash(posts[0]!.textHash)).toHaveLength(0);

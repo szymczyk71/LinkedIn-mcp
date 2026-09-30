@@ -73,6 +73,8 @@ export interface Post {
   commentUrl: string | null;
   commentStatus: CommentStatus;
   commentDueUtc: string | null;
+  /** Ustawiane tuż przed wysłaniem komentarza; chroni przed dublowaniem po restarcie. */
+  commentClaimedAt: string | null;
   idempotencyKey: string;
   linkedinPostUrn: string | null;
   postUrl: string | null;
