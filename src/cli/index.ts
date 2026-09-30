@@ -16,6 +16,7 @@ import {
 } from '../core/index.js';
 import { outLogFile, startWorkerDetached, stopWorker, tail, workerHealth } from '../worker/control.js';
 import { autostartFile, autostartInstalled, installAutostart, uninstallAutostart } from './autostart.js';
+import { deleteLivePost, tokenClear, tokenImport, tokenStatus, tokenVerify } from './token-commands.js';
 import { SERVER_NAME, defaultClaudeConfigPath, findClaudeConfigCandidates, serverEntry, snippet, writeClaudeConfig } from './claude-config.js';
 
 const HELP = `Użycie: npm run cli -- <komenda>   (albo skróty npm run ... podane w nawiasach)
@@ -36,6 +37,15 @@ const HELP = `Użycie: npm run cli -- <komenda>   (albo skróty npm run ... poda
   claude-config               pokaż fragment claude_desktop_config.json                     (npm run claude-config)
   claude-config --write [--path <plik>]
                               dopisz serwer "linkedin" do konfiguracji Claude Desktop (z kopią zapasową)
+
+  login                       adres strony logowania OAuth                                   (npm run login)
+  token status                stan zapisanego tokenu (bez samego tokenu)                     (npm run token:status)
+  token verify                sprawdź token wywołaniem userinfo (1 wywołanie API)
+  token import [--expires-in-days 60] [--scopes "openid profile w_member_social"]
+                              import tokenu z Developer Portal (Token Generator)            (npm run token:import)
+  token clear                 usuń token z tego komputera (wylogowanie)
+  linkedin delete-post <id> [--yes]
+                              usuń opublikowany post z LinkedIn (sprzątanie po teście)
 
   pause [powód]               bezpiecznik: harmonogram niczego nie publikuje                 (npm run pause)
   resume                      wyłącz bezpiecznik                                             (npm run resume)
@@ -98,6 +108,30 @@ async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
+
+    case 'token': {
+      const args = rest;
+      if (sub === 'import') print(await tokenImport(config, args));
+      else if (sub === 'clear') print(await tokenClear(config));
+      else if (sub === 'verify') print(await tokenVerify(config));
+      else print(await tokenStatus(config));
+      return 0;
+    }
+
+    case 'login':
+      process.stdout.write(
+        `Otwórz w przeglądarce (worker musi działać): http://${config.workerHost}:${config.workerPort}/oauth/start\n` +
+          `Adres przekierowania w Developer Portal musi być dokładnie: ${config.linkedin.redirectUri}\n`,
+      );
+      return 0;
+
+    case 'linkedin':
+      if (sub === 'delete-post') {
+        print(await deleteLivePost(config, rest[0], rest.includes('--yes')));
+        return 0;
+      }
+      process.stderr.write(HELP);
+      return 2;
 
     case 'pause': {
       const info = setPause(config.paths.pauseFlagFile, [sub, ...rest].filter(Boolean).join(' ') || null);

@@ -4,6 +4,7 @@ import { LOOPBACK_HOST, type CoreContext, type Logger } from '../core/index.js';
 import { LinkedInService, ToolError } from '../core/service.js';
 import { tokensEqual } from '../core/worker-token.js';
 import { TOOL_NAMES, invokeOnService, type ToolName, type ToolOutcome } from '../mcp/tools.js';
+import { OAuthPages } from './oauth-pages.js';
 
 const MAX_BODY = 1_000_000;
 
@@ -27,8 +28,10 @@ export async function startApi(
   log: Logger,
   port = ctx.config.workerPort,
   onShutdown?: () => void,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<ApiServer> {
   const service = new LinkedInService(ctx, 'mcp');
+  const oauth = new OAuthPages(ctx, log, fetchImpl);
 
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e: unknown) => {
@@ -46,10 +49,7 @@ export async function startApi(
       return send(res, 200, { ok: true, service: 'linkedin-mcp-worker', mode: ctx.config.mode, pid: process.pid });
     }
 
-    if (url.pathname === '/oauth/start' || url.pathname === '/oauth/callback') {
-      res.writeHead(501, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end('<!doctype html><meta charset="utf-8"><h1>Logowanie LinkedIn</h1><p>Logowanie OAuth zostanie włączone w etapie 5 (tryb live). W trybie atrapy nie jest potrzebne.</p>');
-    }
+    if (req.method === 'GET' && (await oauth.handle(url, res))) return;
 
     if (req.method === 'POST' && url.pathname === '/api/admin/shutdown') {
       if (!authorized(req.headers.authorization, token)) {

@@ -60,7 +60,7 @@ describe('harmonogram: publikacja i komentarz', () => {
     expect(after.postUrl).toMatch(/^https:\/\/www\.linkedin\.com\/feed\/update\//);
     expect(after.commentDueUtc).toBe('2026-11-06T07:10:00.000Z');
     expect(after.commentStatus).toBe('waiting');
-    expect((await store.getAuthMeta())?.canComment ?? 'unknown').toBe('unknown');
+    expect((await store.getAuthMeta('mock'))?.canComment ?? 'unknown').toBe('unknown');
 
     clock.advanceMin(5);
     expect((await scheduler.tick()).commentsDone).toEqual([]);
@@ -68,7 +68,7 @@ describe('harmonogram: publikacja i komentarz', () => {
     expect((await scheduler.tick()).commentsDone).toEqual([p!.id]);
     expect((await get(ctx, p!.id)).commentStatus).toBe('done');
     expect(mock.posts[0]!.comments[0]!.text).toBe('Komentarz');
-    expect((await store.getAuthMeta())!.canComment).toBe('yes');
+    expect((await store.getAuthMeta('mock'))!.canComment).toBe('yes');
   });
 
   it('nie publikuje przed terminem', async () => {
@@ -290,7 +290,7 @@ describe('scenariusze błędów atrapy', () => {
     const post = await get(ctx, p!.id);
     expect(post.commentStatus).toBe('skipped');
     expect(post.commentError?.code).toBe('linkedin_forbidden');
-    expect((await store.getAuthMeta())!.canComment).toBe('no');
+    expect((await store.getAuthMeta('mock'))!.canComment).toBe('no');
   });
 
   for (const mode of ['timeout', 'ambiguous', 'reject', 'unauthorized'] as const) {

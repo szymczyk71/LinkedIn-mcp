@@ -75,6 +75,8 @@ export interface Post {
   ifNoLink: IfNoLink | null;
   commentDelayMin: number;
   image: PostImage | null;
+  /** Tryb, w którym post zatwierdzono. Worker publikuje tylko posty ze swojego trybu. */
+  mode: 'mock' | 'live';
   commentUrl: string | null;
   commentStatus: CommentStatus;
   commentDueUtc: string | null;

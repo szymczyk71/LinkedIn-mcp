@@ -29,6 +29,6 @@ export function plannedPost(seq: number, publishAtUtc: string, text = `Post test
   };
 }
 
-export function toNewPost(p: PlannedPost, seriesId: string): NewPost {
-  return newPostFromPlanned(p, seriesId);
+export function toNewPost(p: PlannedPost, seriesId: string, mode: 'mock' | 'live' = 'mock'): NewPost {
+  return newPostFromPlanned(p, seriesId, mode);
 }

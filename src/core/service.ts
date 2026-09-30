@@ -22,6 +22,10 @@ import { TimeInputError, formatLocal, minutesBetween, nextTickUtc, parseLocalDat
 import { charCount, newId, textHash } from './util.js';
 import { isValidTimezone } from './config.js';
 import { ImageError, stageImage, type PostImage } from './image.js';
+import { createTokenStore } from './linkedin/oauth.js';
+
+/** Limit Images API: obrazy poniżej 36 152 320 pikseli. */
+const MAX_IMAGE_PIXELS = 36_152_320;
 
 /** Błąd narzędzia: czytelny opis + kod, bez sekretów. */
 export class ToolError extends Error {
@@ -118,9 +122,9 @@ export class LinkedInService {
   async authStatus() {
     const { linkedin, store, config } = this.ctx;
     const info = await linkedin.checkAuth();
-    const meta = await store.getAuthMeta();
+    const meta = await store.getAuthMeta(linkedin.mode);
     if (info.connected) {
-      await store.setAuthMeta({
+      await store.setAuthMeta(linkedin.mode, {
         personUrn: info.personUrn,
         profileName: info.profileName,
         profileUrl: info.profileUrl,
@@ -139,6 +143,25 @@ export class LinkedInService {
     if (pause.paused) warnings.push('Bezpiecznik PAUSE jest włączony: harmonogram niczego nie publikuje.');
     const failedRecently = (await store.listPosts({ status: 'failed', limit: 20 })).length;
     if (failedRecently) warnings.push(`W kolejce są posty z błędem publikacji (${failedRecently}). Sprawdź linkedin_list_queue ze statusem failed.`);
+
+    // Stan prawdziwego logowania (także w trybie atrapy - żeby przed przełączeniem było widać, czy jest token).
+    const tok = await createTokenStore(config).info();
+    const liveMeta = await store.getAuthMeta('live');
+    const liveLogin = {
+      present: tok.present,
+      profile_name: tok.profileName,
+      expires_at: tok.expiresAt,
+      days_left: tok.expiresAt ? Math.floor((new Date(tok.expiresAt).getTime() - this.now().getTime()) / 86_400_000) : null,
+      scopes: tok.scopes,
+      can_comment: liveMeta?.canComment ?? 'unknown',
+    };
+    if (config.mode === 'mock') {
+      warnings.push(
+        tok.present
+          ? `Tryb atrapy: nic nie trafia na LinkedIn. Prawdziwe logowanie jest gotowe (${tok.profileName ?? 'profil'}) - przełączenie: LINKEDIN_MODE=live w .env i npm run worker:restart.`
+          : 'Tryb atrapy: nic nie trafia na LinkedIn.',
+      );
+    }
     const result = {
       connected: info.connected,
       profile_name: info.profileName,
@@ -150,6 +173,8 @@ export class LinkedInService {
       can_comment: meta?.canComment ?? 'unknown',
       mode: config.mode,
       paused: pause.paused,
+      post_visibility: config.linkedin.visibility,
+      live_login: liveLogin,
       warnings,
     };
     await this.ctx.audit.record(this.actor, 'linkedin_auth_status', 'ok', null, { connected: result.connected });
@@ -299,7 +324,7 @@ export class LinkedInService {
       }
     }
     try {
-      const { series, posts } = await store.commitPlan(plan_id, nowIso, (pl, sid) => pl.posts.map((p) => newPostFromPlanned(p, sid)), newId('ser'));
+      const { series, posts } = await store.commitPlan(plan_id, nowIso, (pl, sid) => pl.posts.map((p) => newPostFromPlanned(p, sid, this.ctx.linkedin.mode)), newId('ser'));
       await audit.record(this.actor, 'linkedin_commit_series', 'ok', series.id, { planId: plan_id, posts: posts.map((p) => p.id) });
       return {
         series_id: series.id,
@@ -534,7 +559,12 @@ export class LinkedInService {
   private checkImage(imagePath: string, alt: string, chk: CheckedPost): PostImage | null {
     try {
       const img = stageImage(imagePath, this.cfg.paths.imagesDir, this.cfg.imageMaxBytes, normalizeText(alt).trim());
+      if (img.width && img.height && img.width * img.height >= MAX_IMAGE_PIXELS) {
+        chk.errors.push(`Obraz ma ${img.width}×${img.height} pikseli - LinkedIn przyjmuje mniej niż 36 152 320 pikseli.`);
+        return null;
+      }
       if (!img.alt) chk.warnings.push('Obraz nie ma tekstu alternatywnego (image_alt) - warto go dodać dla czytników ekranu.');
+      else if ([...img.alt].length > 120) chk.warnings.push('Tekst alternatywny ma ponad 120 znaków - LinkedIn zaleca krótszy.');
       return img;
     } catch (e) {
       if (e instanceof ImageError) {

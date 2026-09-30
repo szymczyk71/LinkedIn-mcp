@@ -164,17 +164,25 @@ npm run resume
 
 Pauza to plik `%LOCALAPPDATA%\linkedin-mcp\PAUSE`. Podczas pauzy posty spóźnione ponad próg nadal dostają `missed`, a `linkedin_auth_status` pokazuje ostrzeżenie.
 
-## Przejście z atrapy na prawdziwe LinkedIn (etap 5)
+## Przejście z atrapy na prawdziwe LinkedIn
 
-Tryb live będzie działał po etapie 5. Wtedy:
+1. **Developer Portal** ([linkedin.com/developers/apps](https://www.linkedin.com/developers/apps)):
+   - zakładka **Products**: dodaj „Sign In with LinkedIn using OpenID Connect” oraz „Share on LinkedIn” (`w_member_social`);
+   - zakładka **Auth → Authorized redirect URLs**: dodaj dokładnie `http://127.0.0.1:47811/oauth/callback`.
+2. **`.env`** (w katalogu repozytorium): uzupełnij `LINKEDIN_CLIENT_ID` i `LINKEDIN_CLIENT_SECRET`. Opcjonalnie ustaw `LINKEDIN_POST_VISIBILITY=CONNECTIONS`, jeśli posty mają widzieć tylko kontakty pierwszego stopnia. Potem `npm run worker:restart`.
+3. **Logowanie** działa także w trybie atrapy, więc możesz zalogować się przed przełączeniem. Otwórz `http://127.0.0.1:47811/oauth/start` (albo uruchom `npm run login`, które wypisze ten adres), zaloguj się na LinkedIn i kliknij **Allow**.
+   - Strona pokaże konto, datę wygaśnięcia tokenu (60 dni) i uprawnienia.
+   - Token jest szyfrowany kluczem z Menedżera poświadczeń Windows.
+   - Stan sprawdzisz przez `npm run token:status` albo w `linkedin_auth_status` (pole `live_login`).
+   - Zamiast logowania możesz wkleić token z Token Generatora: `npm run token:import`. Token nie będzie widoczny przy wklejaniu.
+4. **Przełączenie:** ustaw w `.env` **jawnie** `LINKEDIN_MODE=live` i uruchom `npm run worker:restart`. W `worker.log` pojawi się baner trybu live.
+5. **Próba:** zaplanuj jeden post testowy za około 10 minut, z krótkim opóźnieniem komentarza. Na wszelki wypadek miej pod ręką `npm run pause`. Po sprawdzeniu możesz usunąć post z LinkedIn: `npm run cli -- linkedin delete-post <id> --yes`.
 
-1. W [LinkedIn Developer Portal](https://www.linkedin.com/developers/apps) aplikacja musi mieć produkty „Sign In with LinkedIn using OpenID Connect” oraz „Share on LinkedIn” (uprawnienie `w_member_social`), a także adres przekierowania `http://127.0.0.1:47811/oauth/callback`.
-2. W `.env` ustaw `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` i **jawnie** `LINKEDIN_MODE=live`.
-3. `npm run worker:restart`. Worker pokaże baner trybu live w logu.
-4. Zaloguj się w przeglądarce pod adresem `login_url` z `linkedin_auth_status`, albo zaimportuj token wygenerowany w Developer Portal.
-5. Najpierw zrób próbę na poście testowym. Na wszelki wypadek miej pod ręką `npm run pause`.
+Posty zatwierdzone w trybie atrapy **nie zostaną** wysłane przez worker live. Dostaną status `failed` z kodem `mode_mismatch`.
 
-Powrót do atrapy: `LINKEDIN_MODE=mock` i `npm run worker:restart`.
+Powrót do atrapy: `LINKEDIN_MODE=mock` i `npm run worker:restart`. Wylogowanie (usunięcie tokenu z komputera): `npm run cli -- token clear`.
+
+Token wygasa po 60 dniach. `linkedin_auth_status` ostrzega 7 dni wcześniej. Wtedy otwórz ponownie `/oauth/start`; jeśli jesteś zalogowany na LinkedIn w przeglądarce, ekran zgody zwykle zostaje pominięty.
 
 ## Rozwiązywanie problemów
 

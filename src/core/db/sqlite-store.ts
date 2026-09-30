@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import type { LinkedInMode } from '../config.js';
 import type { AuditEntry, AuthMeta, Plan, Post, PostEvent, PostStatus, Series } from '../model.js';
 import {
   PlanAlreadyCommittedError,
@@ -101,6 +102,23 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE posts ADD COLUMN image_json TEXT;
   `,
+  // 4: tryb (mock/live) posta i osobne metadane logowania dla każdego trybu
+  `
+  ALTER TABLE posts ADD COLUMN mode TEXT NOT NULL DEFAULT 'mock' CHECK (mode IN ('mock','live'));
+  CREATE TABLE auth_state (
+    mode TEXT PRIMARY KEY CHECK (mode IN ('mock','live')),
+    person_urn TEXT,
+    profile_name TEXT,
+    profile_url TEXT,
+    expires_at TEXT,
+    scopes_json TEXT NOT NULL,
+    can_comment TEXT NOT NULL CHECK (can_comment IN ('yes','no','unknown')),
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO auth_state (mode, person_urn, profile_name, profile_url, expires_at, scopes_json, can_comment, updated_at)
+    SELECT 'mock', person_urn, profile_name, profile_url, expires_at, scopes_json, can_comment, updated_at FROM auth_meta;
+  DROP TABLE auth_meta;
+  `,
 ];
 
 /** Mapowanie pól Post (camelCase) na kolumny. Pola JSON obsługiwane osobno. */
@@ -151,6 +169,7 @@ function rowToPost(r: Row): Post {
     ifNoLink: (r.if_no_link as Post['ifNoLink']) ?? null,
     commentDelayMin: r.comment_delay_min as number,
     image: parseJson(r.image_json),
+    mode: (r.mode as Post['mode']) ?? 'mock',
     commentUrl: (r.comment_url as string | null) ?? null,
     commentStatus: r.comment_status as Post['commentStatus'],
     commentDueUtc: (r.comment_due_utc as string | null) ?? null,
@@ -240,11 +259,11 @@ export class SqliteStore implements Store {
       this.db.prepare('INSERT INTO series (id, plan_id, created_at) VALUES (?, ?, ?)').run(seriesId, planId, nowUtc);
       const insert = this.db.prepare(
         `INSERT INTO posts (id, series_id, seq, text, text_hash, publish_at_utc, timezone, status, comment_text, link_mode,
-           comment_text_no_link, if_no_link, comment_delay_min, image_json, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
+           comment_text_no_link, if_no_link, comment_delay_min, image_json, mode, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
            linkedin_post_urn, post_url, linkedin_comment_urn, published_at_utc, last_error_json, comment_error_json,
            version, created_at, updated_at)
          VALUES (@id, @seriesId, @seq, @text, @textHash, @publishAtUtc, @timezone, @status, @commentText, @linkMode,
-           @commentTextNoLink, @ifNoLink, @commentDelayMin, @image, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
+           @commentTextNoLink, @ifNoLink, @commentDelayMin, @image, @mode, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
            @linkedinPostUrn, @postUrl, @linkedinCommentUrn, @publishedAtUtc, @lastError, @commentError,
            1, @now, @now)`,
       );
@@ -420,8 +439,8 @@ export class SqliteStore implements Store {
     }));
   }
 
-  async getAuthMeta(): Promise<AuthMeta | null> {
-    const r = this.db.prepare('SELECT * FROM auth_meta WHERE id = 1').get() as Row | undefined;
+  async getAuthMeta(mode: LinkedInMode): Promise<AuthMeta | null> {
+    const r = this.db.prepare('SELECT * FROM auth_state WHERE mode = ?').get(mode) as Row | undefined;
     if (!r) return null;
     return {
       personUrn: (r.person_urn as string | null) ?? null,
@@ -434,20 +453,20 @@ export class SqliteStore implements Store {
     };
   }
 
-  async setAuthMeta(meta: AuthMeta | null): Promise<void> {
+  async setAuthMeta(mode: LinkedInMode, meta: AuthMeta | null): Promise<void> {
     if (meta === null) {
-      this.db.prepare('DELETE FROM auth_meta WHERE id = 1').run();
+      this.db.prepare('DELETE FROM auth_state WHERE mode = ?').run(mode);
       return;
     }
     this.db
       .prepare(
-        `INSERT INTO auth_meta (id, person_urn, profile_name, profile_url, expires_at, scopes_json, can_comment, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET person_urn = excluded.person_urn, profile_name = excluded.profile_name,
+        `INSERT INTO auth_state (mode, person_urn, profile_name, profile_url, expires_at, scopes_json, can_comment, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(mode) DO UPDATE SET person_urn = excluded.person_urn, profile_name = excluded.profile_name,
            profile_url = excluded.profile_url, expires_at = excluded.expires_at, scopes_json = excluded.scopes_json,
            can_comment = excluded.can_comment, updated_at = excluded.updated_at`,
       )
-      .run(meta.personUrn, meta.profileName, meta.profileUrl, meta.expiresAt, JSON.stringify(meta.scopes), meta.canComment, meta.updatedAt);
+      .run(mode, meta.personUrn, meta.profileName, meta.profileUrl, meta.expiresAt, JSON.stringify(meta.scopes), meta.canComment, meta.updatedAt);
   }
 
   async close(): Promise<void> {

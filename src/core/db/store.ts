@@ -1,3 +1,4 @@
+import type { LinkedInMode } from '../config.js';
 import type {
   AuditEntry,
   AuthMeta,
@@ -118,8 +119,9 @@ export interface Store {
   appendAudit(entry: AuditEntry): Promise<void>;
   listAudit(limit?: number): Promise<AuditEntry[]>;
 
-  getAuthMeta(): Promise<AuthMeta | null>;
-  setAuthMeta(meta: AuthMeta | null): Promise<void>;
+  /** Metadane logowania osobno dla atrapy i prawdziwego konta. */
+  getAuthMeta(mode: LinkedInMode): Promise<AuthMeta | null>;
+  setAuthMeta(mode: LinkedInMode, meta: AuthMeta | null): Promise<void>;
 
   close(): Promise<void>;
 }

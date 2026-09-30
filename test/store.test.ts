@@ -122,7 +122,7 @@ describe('SqliteStore', () => {
 
   it('metadane logowania', async () => {
     const s = open();
-    expect(await s.getAuthMeta()).toBeNull();
+    expect(await s.getAuthMeta('mock')).toBeNull();
     const meta = {
       personUrn: 'urn:li:person:X',
       profileName: 'Szymon',
@@ -132,9 +132,12 @@ describe('SqliteStore', () => {
       canComment: 'unknown' as const,
       updatedAt: NOW,
     };
-    await s.setAuthMeta(meta);
-    await s.setAuthMeta({ ...meta, canComment: 'yes' });
-    expect((await s.getAuthMeta())!.canComment).toBe('yes');
+    await s.setAuthMeta('mock', meta);
+    await s.setAuthMeta('mock', { ...meta, canComment: 'yes' });
+    expect((await s.getAuthMeta('mock'))!.canComment).toBe('yes');
+    expect(await s.getAuthMeta('live')).toBeNull(); // tryby są rozdzielone
+    await s.setAuthMeta('live', { ...meta, canComment: 'no' });
+    expect((await s.getAuthMeta('mock'))!.canComment).toBe('yes');
   });
 
   it('migracje są idempotentne przy ponownym otwarciu pliku', async () => {

@@ -166,6 +166,24 @@ export class Scheduler {
     if (!claimed) return 'not_claimed';
     await store.addEvent(post.id, 'publishing', null, claimedAt);
 
+    if (claimed.mode !== linkedin.mode) {
+      const now = this.nowIso();
+      const err: PostError = {
+        code: 'mode_mismatch',
+        message:
+          claimed.mode === 'mock'
+            ? 'Post zatwierdzono w trybie atrapy - worker w trybie live go nie wyśle. Jeśli ma się ukazać naprawdę, przygotuj i zatwierdź go ponownie.'
+            : 'Post zatwierdzono w trybie live, a worker działa w trybie atrapy - nie został wysłany. Przełącz worker na live albo zatwierdź post ponownie.',
+        ambiguous: false,
+        at: now,
+      };
+      await store.transitionPost(post.id, ['publishing'], { status: 'failed', lastError: err, ...skipCommentAfterFailure(claimed, now) }, now);
+      await store.addEvent(post.id, 'publish_failed', { error: err }, now);
+      await audit.record('scheduler', 'publish_post', 'rejected', post.id, { error: err });
+      this.log.warn('Post z innego trybu - nie wysyłam', { postId: post.id, postMode: claimed.mode, workerMode: linkedin.mode });
+      return 'failed';
+    }
+
     if (claimed.image && !verifyStagedImage(claimed.image)) {
       const now = this.nowIso();
       const err: PostError = {
@@ -267,9 +285,10 @@ export class Scheduler {
 
   private async setCanComment(value: CanComment): Promise<void> {
     const { store } = this.ctx;
-    const meta = await store.getAuthMeta();
+    const mode = this.ctx.linkedin.mode;
+    const meta = await store.getAuthMeta(mode);
     if (meta?.canComment === value) return;
-    await store.setAuthMeta({
+    await store.setAuthMeta(mode, {
       personUrn: meta?.personUrn ?? null,
       profileName: meta?.profileName ?? null,
       profileUrl: meta?.profileUrl ?? null,

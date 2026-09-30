@@ -28,7 +28,10 @@
     "autostart:install": "node dist/cli/index.js autostart install",
     "autostart:uninstall": "node dist/cli/index.js autostart uninstall",
     "claude-config": "node dist/cli/index.js claude-config",
-    "setup": "npm install && npm run build"
+    "setup": "npm install && npm run build",
+    "login": "node dist/cli/index.js login",
+    "token:status": "node dist/cli/index.js token status",
+    "token:import": "node dist/cli/index.js token import"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",

@@ -95,8 +95,21 @@ Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce 
 - `linkedin_preview_series` zwraca dla każdego posta dodatkowo `publish_effective_local`, czyli faktyczną godzinę przebiegu, oraz `comment` (długość, `link_mode`, `if_no_link`, opóźnienie). Jeśli seria ma błędy, zwraca `plan_id: null` i niczego nie zapisuje. Komentarz ma limit 1250 znaków. Gdy przy `link_mode: later` podano tylko `comment_text_no_link`, `if_no_link` przyjmuje domyślnie wartość `post_without_link`.
 - `linkedin_commit_series` przy zatwierdzeniu sprawdza jeszcze raz minimalne wyprzedzenie terminu i duplikaty, bo od podglądu mogło minąć do 30 minut. Jeśli któryś warunek nie jest spełniony, zwraca błąd `plan_no_longer_valid`.
 - `linkedin_list_queue`: `from` i `to` to czas lokalny w strefie domyślnej, w formacie `RRRR-MM-DD` (cały dzień) lub `RRRR-MM-DDTGG:MM[:SS]`.
+- `linkedin_auth_status` zwraca dodatkowo `post_visibility` (`PUBLIC`/`CONNECTIONS`) oraz `live_login`: stan prawdziwego logowania, także w trybie atrapy. `live_login` zawiera `present`, `profile_name`, `expires_at`, `days_left`, `scopes` i `can_comment`, ale nigdy samego tokenu. Wartość `can_comment` jest pamiętana osobno dla atrapy i dla prawdziwego konta.
 - `linkedin_auth_status` zwraca dodatkowo `mode` (`mock`/`live`), `paused` i `warnings`. Ostrzeżenia dotyczą wygasania logowania (7 dni lub mniej), pauzy, braku połączenia i postów z błędem publikacji.
 - `linkedin_set_comment_link` działa, dopóki komentarz nie został wysłany. Link można też zmienić po publikacji posta, jeszcze przed dodaniem komentarza.
+
+### Tryb live (prawdziwe LinkedIn)
+
+- Serwer używa API z dokumentacji na learn.microsoft.com (wersja `LINKEDIN_API_VERSION`, domyślnie `202609`, nagłówki `Linkedin-Version` i `X-Restli-Protocol-Version: 2.0.0`):
+  - post: `POST /rest/posts` z autorem `urn:li:person:{sub}`, gdzie `sub` pochodzi z `/v2/userinfo`;
+  - obraz: `POST /rest/images?action=initializeUpload`, a potem `PUT` pliku;
+  - komentarz: `POST /rest/socialActions/{post}/comments`.
+- Treść posta serwer zamienia na format „little”: znaki zastrzeżone `| { } @ [ ] ( ) < > # \ * _ ~` są escapowane, więc post ukazuje się dokładnie w takiej postaci, w jakiej był w podglądzie. Wyjątkiem są hashtagi `#słowo` na początku słowa, które zostają klikalne. Znak `@` jest zawsze zwykłym tekstem, więc serwer nie tworzy wzmianek. Komentarz jest wysyłany bez zmian.
+- Widoczność postów ustawia konfiguracja `LINKEDIN_POST_VISIBILITY`: `PUBLIC` albo `CONNECTIONS` (tylko kontakty pierwszego stopnia).
+- Logowanie odbywa się przez `/oauth/start` na workerze z zakresami `openid profile w_member_social`. Token jest zaszyfrowany (AES-256-GCM, klucz w Menedżerze poświadczeń Windows) i działa 60 dni. LinkedIn nie wydaje zwykłym aplikacjom tokenów odświeżania, więc po wygaśnięciu trzeba zalogować się ponownie. `linkedin_auth_status` ostrzega o tym 7 dni wcześniej.
+- Każdy post zapamiętuje tryb, w którym go zatwierdzono (`mock` albo `live`). Worker publikuje tylko posty ze swojego trybu. Post z innego trybu dostaje `failed` z kodem `mode_mismatch` i nie jest wysyłany.
+- Obrazy muszą mieć mniej niż 36 152 320 pikseli, a tekst alternatywny najwyżej 4086 znaków (zalecane poniżej 120).
 
 ### Obrazy
 
@@ -115,7 +128,7 @@ Błąd narzędzia ma postać `{ "error": { "code", "message", "details"? } }`, a
 
 Błędy nakładki stdio: `worker_not_running` (komunikat zawiera komendę uruchomienia workera), `worker_timeout`, `worker_auth_failed`, `worker_bad_response`, `config_error`.
 
-Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthorized`, `linkedin_forbidden`, `linkedin_rate_limited`, `linkedin_network`, `linkedin_timeout`, `linkedin_ambiguous`, `publish_interrupted`, `comment_interrupted`, `comment_missed`, `post_not_published`, `image_missing`, `internal_error`. Pole `ambiguous: true` oznacza, że nie wiadomo, czy obiekt powstał na LinkedIn.
+Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthorized`, `linkedin_forbidden`, `linkedin_rate_limited`, `linkedin_network`, `linkedin_timeout`, `linkedin_ambiguous`, `publish_interrupted`, `comment_interrupted`, `comment_missed`, `post_not_published`, `image_missing`, `mode_mismatch`, `internal_error`. Pole `ambiguous: true` oznacza, że nie wiadomo, czy obiekt powstał na LinkedIn.
 
 ## Harmonogram
 

@@ -44,7 +44,20 @@ const EnvSchema = z.object({
   LINKEDIN_CLIENT_ID: optionalString,
   LINKEDIN_CLIENT_SECRET: optionalString,
   LINKEDIN_REDIRECT_URI: optionalString,
-  LINKEDIN_API_VERSION: optionalString,
+  LINKEDIN_API_VERSION: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? '202609' : v.trim()))
+    .pipe(z.string().regex(/^\d{6}$/, 'format RRRRMM, np. 202609')),
+  LINKEDIN_POST_VISIBILITY: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? 'PUBLIC' : v.trim().toUpperCase()))
+    .pipe(z.enum(['PUBLIC', 'CONNECTIONS'])),
+  LINKEDIN_SCOPES: optionalString,
+  /** Tylko do testów: podmiana adresów LinkedIn na lokalną atrapę HTTP. */
+  LINKEDIN_API_BASE: optionalString,
+  LINKEDIN_OAUTH_BASE: optionalString,
   LINKEDIN_MCP_ENC_KEY: optionalString,
   HTTP_PORT: intFromEnv(8080, 1, 65535),
   MCP_HTTP_TOKEN: optionalString,
@@ -84,7 +97,11 @@ export interface Config {
     clientId?: string;
     clientSecret?: string;
     redirectUri: string;
-    apiVersion?: string;
+    apiVersion: string;
+    visibility: 'PUBLIC' | 'CONNECTIONS';
+    scopes: string[];
+    apiBase: string;
+    oauthBase: string;
   };
   encKeyFromEnv?: string;
   http: { port: number; token?: string };
@@ -168,6 +185,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
       clientSecret: e.LINKEDIN_CLIENT_SECRET,
       redirectUri: e.LINKEDIN_REDIRECT_URI ?? `http://${LOOPBACK_HOST}:${e.WORKER_PORT}/oauth/callback`,
       apiVersion: e.LINKEDIN_API_VERSION,
+      visibility: e.LINKEDIN_POST_VISIBILITY,
+      scopes: (e.LINKEDIN_SCOPES ?? 'openid profile w_member_social').split(/[\s,]+/).filter(Boolean),
+      apiBase: (e.LINKEDIN_API_BASE ?? 'https://api.linkedin.com').replace(/\/$/, ''),
+      oauthBase: (e.LINKEDIN_OAUTH_BASE ?? 'https://www.linkedin.com').replace(/\/$/, ''),
     },
     encKeyFromEnv: e.LINKEDIN_MCP_ENC_KEY,
     http: { port: e.HTTP_PORT, token: e.MCP_HTTP_TOKEN },
@@ -203,6 +224,9 @@ export function describeConfig(c: Config): Record<string, unknown> {
     schedulerIntervalMin: c.schedulerIntervalMin,
     linkedinClientConfigured: Boolean(c.linkedin.clientId && c.linkedin.clientSecret),
     redirectUri: c.linkedin.redirectUri,
+    apiVersion: c.linkedin.apiVersion,
+    postVisibility: c.linkedin.visibility,
+    scopes: c.linkedin.scopes.join(' '),
     encryptionKeyStore: c.encKeyFromEnv ? 'env' : 'windows-credential-manager',
   };
 }
