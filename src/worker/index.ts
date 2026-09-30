@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Worker: proces w tle z harmonogramem, bazą i klientem LinkedIn.
- * (Lokalne API na 127.0.0.1 dla nakładki MCP dochodzi w etapie 3.)
+ * Worker: proces w tle z harmonogramem (Bree), bazą, klientem LinkedIn
+ * i lokalnym API na 127.0.0.1 dla nakładki MCP (mcp-stdio).
  */
 import { Scheduler, createCore, createLogger, describeConfig, loadConfig, readPause } from '../core/index.js';
+import { ensureWorkerToken } from '../core/worker-token.js';
+import { startApi } from './api.js';
 import { InstanceLock } from './instance-lock.js';
 import { startScheduler } from './scheduler-runner.js';
 
@@ -24,7 +26,20 @@ async function main(): Promise<void> {
 
   const recovery = await new Scheduler(core, log).recoverOnStartup();
   await core.audit.record('system', 'worker_start', 'ok', null, { mode: config.mode, ...recovery });
-  await core.store.close(); // przebiegi otwierają własne połączenia
+
+  const token = ensureWorkerToken(config.paths.workerTokenFile);
+  let api;
+  try {
+    api = await startApi(core, token, log);
+  } catch (e) {
+    lock.release();
+    const code = (e as NodeJS.ErrnoException).code;
+    throw new Error(
+      code === 'EADDRINUSE'
+        ? `Port ${config.workerPort} na 127.0.0.1 jest zajęty. Zmień WORKER_PORT w .env albo zamknij program, który go używa.`
+        : `Nie udało się uruchomić lokalnego API: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 
   const runner = await startScheduler(config, log);
   // Pierwszy przebieg od razu po starcie (polityka "missed" po wyłączonym komputerze).
@@ -36,6 +51,8 @@ async function main(): Promise<void> {
     stopping = true;
     log.info('Worker zatrzymuje się', { signal });
     await runner.stop();
+    await api.close();
+    await core.store.close();
     lock.release();
     process.exit(0);
   };

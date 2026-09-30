@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PACKAGE_ROOT, SqliteStore, newId, type Post } from '../src/core/index.js';
 import { plannedPost, tmpDataDir, toNewPost } from './helpers.js';
+import { freePort, isolatedEnv } from './process-helpers.js';
 
 const WORKER = path.join(PACKAGE_ROOT, 'dist', 'worker', 'index.js');
 const children: ChildProcess[] = [];
@@ -11,11 +12,10 @@ afterEach(() => {
   for (const c of children.splice(0)) if (c.exitCode === null) c.kill();
 });
 
-function startWorker(dataDir: string): ChildProcess {
-  const child = spawn(process.execPath, [WORKER], {
-    env: { ...process.env, LINKEDIN_MCP_DATA_DIR: dataDir, LINKEDIN_MCP_ENV_FILE: path.join(dataDir, 'none.env'), LINKEDIN_MODE: 'mock' },
-    stdio: ['ignore', 'ignore', 'pipe'],
-  });
+const ports = new Map<string, number>();
+async function startWorker(dataDir: string): Promise<ChildProcess> {
+  if (!ports.has(dataDir)) ports.set(dataDir, await freePort());
+  const child = spawn(process.execPath, [WORKER], { env: isolatedEnv(dataDir, ports.get(dataDir)!), stdio: ['ignore', 'ignore', 'pipe'] });
   children.push(child);
   return child;
 }
@@ -60,13 +60,13 @@ describe('proces workera', () => {
 
     // Atrapa odpowiada wolno, żeby dało się zabić proces w trakcie publikacji.
     fs.writeFileSync(scenarioFile, JSON.stringify({ delayMs: 10_000 }));
-    const first = startWorker(dataDir);
+    const first = await startWorker(dataDir);
     await waitFor(async () => (await readPost(dbFile, p1!.id)).status === 'publishing');
     first.kill('SIGKILL');
     await new Promise((r) => first.once('exit', r));
 
     fs.writeFileSync(scenarioFile, JSON.stringify({}));
-    const second = startWorker(dataDir);
+    const second = await startWorker(dataDir);
     const recovered = await waitFor(async () => {
       const p = await readPost(dbFile, p1!.id);
       return p.status === 'failed' ? p : null;
@@ -86,9 +86,9 @@ describe('proces workera', () => {
 
   it('druga instancja workera odmawia startu', async () => {
     const dataDir = tmpDataDir();
-    const first = startWorker(dataDir);
+    const first = await startWorker(dataDir);
     await waitFor(async () => fs.existsSync(path.join(dataDir, 'worker.pid')));
-    const second = startWorker(dataDir);
+    const second = await startWorker(dataDir);
     let stderr = '';
     second.stderr!.on('data', (d) => (stderr += String(d)));
     const code = await new Promise<number | null>((r) => second.once('exit', r));

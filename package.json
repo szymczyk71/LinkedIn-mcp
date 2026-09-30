@@ -16,7 +16,9 @@
     "doctor": "node dist/cli/index.js doctor",
     "pause": "node dist/cli/index.js pause",
     "resume": "node dist/cli/index.js resume",
-    "worker": "node dist/worker/index.js"
+    "worker": "node dist/worker/index.js",
+    "mcp:stdio": "node dist/mcp-stdio/index.js",
+    "inspector": "npx -y @modelcontextprotocol/inspector node dist/mcp-stdio/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",

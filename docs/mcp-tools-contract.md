@@ -88,6 +88,24 @@ Uzupełnia link w komentarzu z trybem `later`.
 
 Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce `[LINK]`. Odrzuca adres niebędący poprawnym URL-em.
 
+## Szczegóły implementacji (serwer lokalny)
+
+- `linkedin_preview_series` zwraca dla każdego posta dodatkowo `publish_effective_local`, czyli faktyczną godzinę przebiegu, oraz `comment` (długość, `link_mode`, `if_no_link`, opóźnienie). Jeśli seria ma błędy, zwraca `plan_id: null` i niczego nie zapisuje. Komentarz ma limit 1250 znaków. Gdy przy `link_mode: later` podano tylko `comment_text_no_link`, `if_no_link` przyjmuje domyślnie wartość `post_without_link`.
+- `linkedin_commit_series` przy zatwierdzeniu sprawdza jeszcze raz minimalne wyprzedzenie terminu i duplikaty, bo od podglądu mogło minąć do 30 minut. Jeśli któryś warunek nie jest spełniony, zwraca błąd `plan_no_longer_valid`.
+- `linkedin_list_queue`: `from` i `to` to czas lokalny w strefie domyślnej, w formacie `RRRR-MM-DD` (cały dzień) lub `RRRR-MM-DDTGG:MM[:SS]`.
+- `linkedin_auth_status` zwraca dodatkowo `mode` (`mock`/`live`), `paused` i `warnings`. Ostrzeżenia dotyczą wygasania logowania (7 dni lub mniej), pauzy, braku połączenia i postów z błędem publikacji.
+- `linkedin_set_comment_link` działa, dopóki komentarz nie został wysłany. Link można też zmienić po publikacji posta, jeszcze przed dodaniem komentarza.
+
+### Kody błędów
+
+Błąd narzędzia ma postać `{ "error": { "code", "message", "details"? } }`, a `isError` jest ustawione na `true`.
+
+`invalid_arguments`, `invalid_timezone`, `invalid_datetime`, `nonexistent_local_time`, `plan_not_found`, `plan_expired`, `plan_already_committed` (w `details` jest `series_id`), `plan_no_longer_valid`, `post_not_found`, `not_editable`, `nothing_to_update`, `too_close_to_publish`, `missed_requires_new_time`, `validation_failed` (w `details` są `errors` i `warnings`), `not_cancelable`, `invalid_url`, `not_link_later`, `comment_not_pending`, `conflict`, `internal_error`.
+
+Błędy nakładki stdio: `worker_not_running` (komunikat zawiera komendę uruchomienia workera), `worker_timeout`, `worker_auth_failed`, `worker_bad_response`, `config_error`.
+
+Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthorized`, `linkedin_forbidden`, `linkedin_rate_limited`, `linkedin_network`, `linkedin_timeout`, `linkedin_ambiguous`, `publish_interrupted`, `comment_interrupted`, `comment_missed`, `post_not_published`, `internal_error`. Pole `ambiguous: true` oznacza, że nie wiadomo, czy obiekt powstał na LinkedIn.
+
 ## Harmonogram
 
 - Przebieg harmonogramu działa co `SCHEDULER_INTERVAL_MIN` minut (domyślnie 5) i jest wyrównany do zegara (:00, :05, :10…). Pierwszy przebieg rusza od razu po starcie serwera.
