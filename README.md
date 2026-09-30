@@ -4,6 +4,7 @@ Lokalny serwer MCP dla Claude Desktop. Publikuje zatwierdzone posty na profilu o
 Rozmowa, redakcja i zatwierdzanie odbywają się w Claude Desktop. Serwer wykonuje tylko to, co zostało zatwierdzone.
 
 - Specyfikacja narzędzi: [docs/mcp-tools-contract.md](docs/mcp-tools-contract.md)
+- **Przewodnik użytkownika (jak z tego korzystać):** [docs/user-guide.md](docs/user-guide.md)
 - Wymagania projektu: [docs/build-prompt.md](docs/build-prompt.md)
 
 ## Jak to działa
