@@ -14,6 +14,7 @@ export * from './time.js';
 export * from './posts.js';
 export * from './logger.js';
 export * from './scheduler.js';
+export * from './image.js';
 export * from './service.js';
 export * from './worker-token.js';
 export * from './db/store.js';

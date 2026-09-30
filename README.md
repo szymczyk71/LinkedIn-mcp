@@ -128,6 +128,17 @@ Następnie **zamknij Claude Desktop całkowicie**, także ikonę w zasobniku sys
    - „Pokaż kolejkę.” / „Przesuń drugi post na 9:30.” / „Anuluj pierwszy post.”
 5. Po terminie publikacji (i najbliższym przebiegu co 5 minut) post w kolejce ma status `published`, a 10 minut później komentarz ma `comment_status: done`. „Publikację” w atracie podejrzysz komendą `npm run cli -- mock posts`.
 
+### Posty z obrazem
+
+Obrazu wklejonego do czatu Claude Desktop nie da się przekazać serwerowi. Podaj **ścieżkę do pliku** na dysku (w Eksploratorze: Shift + prawy przycisk → „Kopiuj jako ścieżkę”). Przykład:
+
+> Zaplanuj post »…« na 7.10 o 8:00 z obrazem `C:\Users\SzymonWarda\Pictures\grafika.png`, tekst alternatywny: »Wykres sprzedaży«.
+
+- Obsługiwane formaty: JPG, PNG i GIF, do `IMAGE_MAX_MB` (domyślnie 10 MB). Format jest rozpoznawany po zawartości pliku, a nie po rozszerzeniu.
+- W podglądzie widać nazwę pliku, format, rozmiar i wymiary.
+- Serwer robi kopię pliku przy podglądzie, więc zatwierdzony post nie zmieni się po edycji albo usunięciu oryginału.
+- Obraz można potem zmienić lub usunąć przez `linkedin_update_post`.
+
 ### Symulowanie błędów atrapy
 
 ```powershell
@@ -135,6 +146,7 @@ npm run cli -- mock set publish=timeout        # timeout po wysłaniu (niejednoz
 npm run cli -- mock set publish=reject:1       # jednorazowa odmowa
 npm run cli -- mock set publish=ambiguous      # zerwane połączenie po wysłaniu
 npm run cli -- mock set comment=forbidden      # brak uprawnień do komentarza -> can_comment: no
+npm run cli -- mock set image=reject:1         # odrzucony obraz (post nie powstaje)
 npm run cli -- mock set auth=disconnected      # brak połączenia
 npm run cli -- mock set delayMs=20000          # wolna odpowiedź (widać status publishing)
 npm run cli -- mock show

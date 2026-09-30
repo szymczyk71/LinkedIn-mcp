@@ -47,7 +47,9 @@ export const TOOLS: ToolDef[] = [
     name: 'linkedin_preview_series',
     title: 'Podgląd serii postów',
     description:
-      'Waliduje serię postów i zwraca podgląd oraz plan_id. NICZEGO nie zapisuje do kolejki. Terminy w czasie lokalnym (ISO 8601 bez strefy), min. 5 minut w przód. Harmonogram działa co 5 minut. Pokaż wynik użytkownikowi i dopiero po jego akceptacji wywołaj linkedin_commit_series. ' +
+      'Waliduje serię postów i zwraca podgląd oraz plan_id. NICZEGO nie zapisuje do kolejki. Terminy w czasie lokalnym (ISO 8601 bez strefy), min. 5 minut w przód. Harmonogram działa co 5 minut. ' +
+      'Post może mieć jeden obraz (image_path: pełna ścieżka do pliku JPG/PNG/GIF na dysku użytkownika, image_alt: tekst alternatywny). Obrazu wklejonego do czatu nie da się przekazać - poproś użytkownika o ścieżkę do pliku. ' +
+      'Pokaż wynik użytkownikowi i dopiero po jego akceptacji wywołaj linkedin_commit_series. ' +
       DATA_NOTE,
     input: PreviewSeriesInput,
     annotations: { readOnlyHint: true },
@@ -79,7 +81,7 @@ export const TOOLS: ToolDef[] = [
     name: 'linkedin_update_post',
     title: 'Zmiana posta przed publikacją',
     description:
-      'Zmienia treść, termin lub komentarz posta ze statusem scheduled albo missed. Post missed wymaga nowego publish_at i wraca wtedy do scheduled. Odrzuca zmianę, gdy do publikacji zostało mniej niż 5 minut. Pokaż zmianę użytkownikowi przed wywołaniem.',
+      'Zmienia treść, termin, komentarz lub obraz (image_path, image_alt, remove_image) posta ze statusem scheduled albo missed. Post missed wymaga nowego publish_at i wraca wtedy do scheduled. Odrzuca zmianę, gdy do publikacji zostało mniej niż 5 minut. Pokaż zmianę użytkownikowi przed wywołaniem.',
     input: UpdatePostInput,
     annotations: { destructiveHint: false },
   },

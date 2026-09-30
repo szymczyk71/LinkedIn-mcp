@@ -25,6 +25,7 @@ export function plannedPost(seq: number, publishAtUtc: string, text = `Post test
     commentTextNoLink: null,
     ifNoLink: null,
     commentDelayMin: 10,
+    image: null,
   };
 }
 

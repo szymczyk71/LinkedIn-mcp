@@ -32,6 +32,7 @@ export type PostPatch = Partial<
     | 'commentTextNoLink'
     | 'ifNoLink'
     | 'commentDelayMin'
+    | 'image'
     | 'commentUrl'
     | 'commentStatus'
     | 'commentDueUtc'

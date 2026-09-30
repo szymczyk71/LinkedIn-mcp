@@ -1,4 +1,7 @@
 /** Model danych zgodny z docs/mcp-tools-contract.md. Wszystkie czasy w bazie to ISO 8601 UTC (z "Z"). */
+import type { PostImage } from './image.js';
+
+export type { PostImage } from './image.js';
 
 export const POST_STATUSES = ['scheduled', 'publishing', 'published', 'failed', 'canceled', 'missed'] as const;
 export type PostStatus = (typeof POST_STATUSES)[number];
@@ -39,6 +42,7 @@ export interface PlannedPost {
   commentTextNoLink: string | null;
   ifNoLink: IfNoLink | null;
   commentDelayMin: number;
+  image: PostImage | null;
 }
 
 export interface Plan {
@@ -70,6 +74,7 @@ export interface Post {
   commentTextNoLink: string | null;
   ifNoLink: IfNoLink | null;
   commentDelayMin: number;
+  image: PostImage | null;
   commentUrl: string | null;
   commentStatus: CommentStatus;
   commentDueUtc: string | null;

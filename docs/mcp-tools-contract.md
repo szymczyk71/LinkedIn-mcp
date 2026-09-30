@@ -39,6 +39,8 @@ Parametry:
   - `comment_text_no_link` - zatwierdzona wersja komentarza bez linku, używana gdy link nie zostanie podany na czas
   - `if_no_link` - `post_without_link` lub `skip`
   - `comment_delay_min` - opóźnienie komentarza w minutach (domyślnie 10)
+  - `image_path` - opcjonalnie: pełna ścieżka do pliku obrazu (JPG, PNG lub GIF) na dysku użytkownika; jeden obraz na post
+  - `image_alt` - opcjonalnie: tekst alternatywny obrazu
 
 Zwraca: `plan_id`, `expires_in_min` (ważność planu), `posts` (dla każdego: numer, `publish_at_local`, `publish_at_utc`, liczba znaków, `warnings`, `errors`) oraz podsumowanie.
 
@@ -74,7 +76,7 @@ Parametry: `id`. Zwraca pełne dane jednego posta wraz z historią zdarzeń.
 
 Zmienia treść, termin lub komentarz posta **przed publikacją**.
 
-Parametry: `id` oraz pola do zmiany (`text`, `publish_at`, `comment_text`, `comment_text_no_link`, `if_no_link`). Zwraca zaktualizowany post. Odrzuca zmianę, jeśli post ma już status inny niż `scheduled` lub `missed`, albo termin jest bliższy niż 5 minut.
+Parametry: `id` oraz pola do zmiany (`text`, `publish_at`, `comment_text`, `comment_text_no_link`, `if_no_link`, `image_path`, `image_alt`, `remove_image`). Zwraca zaktualizowany post. Odrzuca zmianę, jeśli post ma już status inny niż `scheduled` lub `missed`, albo termin jest bliższy niż 5 minut.
 
 Post ze statusem `missed` można przywrócić do harmonogramu, podając nowy `publish_at` (co najmniej 5 minut w przyszłości). Po takiej zmianie wraca do statusu `scheduled`. Zmiana samej treści posta `missed` bez nowego terminu jest odrzucana.
 
@@ -96,6 +98,15 @@ Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce 
 - `linkedin_auth_status` zwraca dodatkowo `mode` (`mock`/`live`), `paused` i `warnings`. Ostrzeżenia dotyczą wygasania logowania (7 dni lub mniej), pauzy, braku połączenia i postów z błędem publikacji.
 - `linkedin_set_comment_link` działa, dopóki komentarz nie został wysłany. Link można też zmienić po publikacji posta, jeszcze przed dodaniem komentarza.
 
+### Obrazy
+
+- Post może mieć jeden obraz. `image_path` to pełna ścieżka do pliku na dysku użytkownika; może być w cudzysłowie, jak przy kopiowaniu z Eksploratora. Obrazu wklejonego do czatu nie da się przekazać, trzeba podać ścieżkę do pliku.
+- Format serwer rozpoznaje po nagłówku pliku, a nie po rozszerzeniu. Dozwolone formaty to JPG, PNG i GIF, a limit rozmiaru ustawia `IMAGE_MAX_MB` (domyślnie 10 MB). Limity LinkedIn (rozmiar, rozdzielczość, długość tekstu alternatywnego) zostaną sprawdzone w dokumentacji Images API w etapie 5.
+- Przy podglądzie serwer kopiuje plik do katalogu danych (`images/<sha256>.<rozszerzenie>`). Zatwierdzenie i publikacja używają tej kopii, więc późniejsza zmiana lub usunięcie oryginału nie zmienia zatwierdzonej treści. Jeśli kopia zniknie albo się zmieni, post dostaje `failed` z kodem `image_missing` i nie jest wysyłany.
+- Podgląd i dane posta zawierają `image`: `file_name`, `mime`, `bytes`, `width`, `height`, `alt`. Brak `image_alt` daje ostrzeżenie. Podsumowanie podglądu ma pole `with_image`.
+- Obraz jest wysyłany do LinkedIn przed utworzeniem posta. Błąd wysyłania jest więc jednoznaczny: post nie powstaje, a serwer niczego nie ponawia.
+- `linkedin_update_post`: `image_path` dodaje albo podmienia obraz, `image_alt` zmienia opis istniejącego obrazu, a `remove_image: true` usuwa obraz. `image_path` i `remove_image` razem to błąd.
+
 ### Kody błędów
 
 Błąd narzędzia ma postać `{ "error": { "code", "message", "details"? } }`, a `isError` jest ustawione na `true`.
@@ -104,7 +115,7 @@ Błąd narzędzia ma postać `{ "error": { "code", "message", "details"? } }`, a
 
 Błędy nakładki stdio: `worker_not_running` (komunikat zawiera komendę uruchomienia workera), `worker_timeout`, `worker_auth_failed`, `worker_bad_response`, `config_error`.
 
-Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthorized`, `linkedin_forbidden`, `linkedin_rate_limited`, `linkedin_network`, `linkedin_timeout`, `linkedin_ambiguous`, `publish_interrupted`, `comment_interrupted`, `comment_missed`, `post_not_published`, `internal_error`. Pole `ambiguous: true` oznacza, że nie wiadomo, czy obiekt powstał na LinkedIn.
+Kody w `last_error` i `comment_error`: `linkedin_rejected`, `linkedin_unauthorized`, `linkedin_forbidden`, `linkedin_rate_limited`, `linkedin_network`, `linkedin_timeout`, `linkedin_ambiguous`, `publish_interrupted`, `comment_interrupted`, `comment_missed`, `post_not_published`, `image_missing`, `internal_error`. Pole `ambiguous: true` oznacza, że nie wiadomo, czy obiekt powstał na LinkedIn.
 
 ## Harmonogram
 

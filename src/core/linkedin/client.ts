@@ -10,8 +10,19 @@ export interface AuthInfo {
   canPost: boolean;
 }
 
+export interface PublishImage {
+  /** Zatwierdzona kopia pliku w katalogu danych. */
+  file: string;
+  mime: string;
+  sha256: string;
+  bytes: number;
+  alt: string;
+}
+
 export interface PublishInput {
   text: string;
+  /** Opcjonalny obraz: klient najpierw go wysyła (upload), potem tworzy post z obrazem. */
+  image?: PublishImage;
   /** Stały klucz posta w naszej bazie. Atrapa używa go do wykrywania duplikatów. */
   idempotencyKey: string;
 }

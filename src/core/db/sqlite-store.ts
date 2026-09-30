@@ -97,6 +97,10 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE posts ADD COLUMN comment_claimed_at TEXT;
   `,
+  // 3: obraz w poście
+  `
+  ALTER TABLE posts ADD COLUMN image_json TEXT;
+  `,
 ];
 
 /** Mapowanie pól Post (camelCase) na kolumny. Pola JSON obsługiwane osobno. */
@@ -111,6 +115,7 @@ const POST_COLUMNS: Record<keyof PostPatch, string> = {
   commentTextNoLink: 'comment_text_no_link',
   ifNoLink: 'if_no_link',
   commentDelayMin: 'comment_delay_min',
+  image: 'image_json',
   commentUrl: 'comment_url',
   commentStatus: 'comment_status',
   commentDueUtc: 'comment_due_utc',
@@ -122,7 +127,7 @@ const POST_COLUMNS: Record<keyof PostPatch, string> = {
   lastError: 'last_error_json',
   commentError: 'comment_error_json',
 };
-const JSON_FIELDS = new Set<keyof PostPatch>(['lastError', 'commentError']);
+const JSON_FIELDS = new Set<keyof PostPatch>(['lastError', 'commentError', 'image']);
 
 type Row = Record<string, unknown>;
 
@@ -145,6 +150,7 @@ function rowToPost(r: Row): Post {
     commentTextNoLink: (r.comment_text_no_link as string | null) ?? null,
     ifNoLink: (r.if_no_link as Post['ifNoLink']) ?? null,
     commentDelayMin: r.comment_delay_min as number,
+    image: parseJson(r.image_json),
     commentUrl: (r.comment_url as string | null) ?? null,
     commentStatus: r.comment_status as Post['commentStatus'],
     commentDueUtc: (r.comment_due_utc as string | null) ?? null,
@@ -234,11 +240,11 @@ export class SqliteStore implements Store {
       this.db.prepare('INSERT INTO series (id, plan_id, created_at) VALUES (?, ?, ?)').run(seriesId, planId, nowUtc);
       const insert = this.db.prepare(
         `INSERT INTO posts (id, series_id, seq, text, text_hash, publish_at_utc, timezone, status, comment_text, link_mode,
-           comment_text_no_link, if_no_link, comment_delay_min, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
+           comment_text_no_link, if_no_link, comment_delay_min, image_json, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
            linkedin_post_urn, post_url, linkedin_comment_urn, published_at_utc, last_error_json, comment_error_json,
            version, created_at, updated_at)
          VALUES (@id, @seriesId, @seq, @text, @textHash, @publishAtUtc, @timezone, @status, @commentText, @linkMode,
-           @commentTextNoLink, @ifNoLink, @commentDelayMin, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
+           @commentTextNoLink, @ifNoLink, @commentDelayMin, @image, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
            @linkedinPostUrn, @postUrl, @linkedinCommentUrn, @publishedAtUtc, @lastError, @commentError,
            1, @now, @now)`,
       );
@@ -248,6 +254,7 @@ export class SqliteStore implements Store {
           ...p,
           lastError: p.lastError ? JSON.stringify(p.lastError) : null,
           commentError: p.commentError ? JSON.stringify(p.commentError) : null,
+          image: p.image ? JSON.stringify(p.image) : null,
           now: nowUtc,
         });
         this.db

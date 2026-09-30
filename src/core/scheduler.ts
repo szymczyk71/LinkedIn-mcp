@@ -5,6 +5,7 @@ import { silentLogger, type Logger } from './logger.js';
 import type { CanComment, Post, PostError } from './model.js';
 import { readPause } from './pause.js';
 import { decideComment } from './posts.js';
+import { verifyStagedImage } from './image.js';
 import { minutesBetween } from './time.js';
 import { addMinutes } from './util.js';
 
@@ -165,8 +166,28 @@ export class Scheduler {
     if (!claimed) return 'not_claimed';
     await store.addEvent(post.id, 'publishing', null, claimedAt);
 
+    if (claimed.image && !verifyStagedImage(claimed.image)) {
+      const now = this.nowIso();
+      const err: PostError = {
+        code: 'image_missing',
+        message: 'Zatwierdzona kopia obrazu zniknęła lub została zmieniona - post nie został wysłany.',
+        ambiguous: false,
+        at: now,
+      };
+      await store.transitionPost(post.id, ['publishing'], { status: 'failed', lastError: err, ...skipCommentAfterFailure(claimed, now) }, now);
+      await store.addEvent(post.id, 'publish_failed', { error: err }, now);
+      await audit.record('scheduler', 'publish_post', 'error', post.id, { error: err });
+      return 'failed';
+    }
+
     try {
-      const res = await linkedin.publishPost({ text: claimed.text, idempotencyKey: claimed.idempotencyKey });
+      const res = await linkedin.publishPost({
+        text: claimed.text,
+        idempotencyKey: claimed.idempotencyKey,
+        ...(claimed.image
+          ? { image: { file: claimed.image.file, mime: claimed.image.mime, sha256: claimed.image.sha256, bytes: claimed.image.bytes, alt: claimed.image.alt } }
+          : {}),
+      });
       const now = this.nowIso();
       const commentDueUtc = claimed.commentStatus === 'none' ? null : addMinutes(now, claimed.commentDelayMin);
       // 'failed' dopuszczamy na wypadek, gdyby recoverOnStartup innego procesu zdążył oznaczyć post,

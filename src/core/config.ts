@@ -37,6 +37,7 @@ const EnvSchema = z.object({
   PLAN_TTL_MIN: intFromEnv(30, 1, 24 * 60),
   POST_MAX_CHARS: intFromEnv(3000, 1, 100_000),
   COMMENT_DELAY_DEFAULT_MIN: intFromEnv(10, 0, 24 * 60),
+  IMAGE_MAX_MB: intFromEnv(10, 1, 200),
   SCHEDULER_INTERVAL_MIN: intFromEnv(5, 1, 30).refine((n) => 60 % n === 0, {
     message: 'musi być dzielnikiem 60 (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30)',
   }),
@@ -61,6 +62,7 @@ export interface Paths {
   mockStateFile: string;
   mockScenarioFile: string;
   workerLogFile: string;
+  imagesDir: string;
 }
 
 export interface Config {
@@ -76,6 +78,8 @@ export interface Config {
   commentDelayDefaultMin: number;
   /** Co ile minut działa przebieg harmonogramu (wyrównany do zegara: :00, :05, ...). */
   schedulerIntervalMin: number;
+  /** Maksymalny rozmiar obrazu dołączanego do posta (bajty). */
+  imageMaxBytes: number;
   linkedin: {
     clientId?: string;
     clientSecret?: string;
@@ -106,6 +110,7 @@ export function buildPaths(dataDir: string): Paths {
     mockStateFile: path.join(dataDir, 'mock-linkedin.json'),
     mockScenarioFile: path.join(dataDir, 'mock-scenario.json'),
     workerLogFile: path.join(dataDir, 'worker.log'),
+    imagesDir: path.join(dataDir, 'images'),
   };
 }
 
@@ -157,6 +162,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
     postMaxChars: e.POST_MAX_CHARS,
     commentDelayDefaultMin: e.COMMENT_DELAY_DEFAULT_MIN,
     schedulerIntervalMin: e.SCHEDULER_INTERVAL_MIN,
+    imageMaxBytes: e.IMAGE_MAX_MB * 1_048_576,
     linkedin: {
       clientId: e.LINKEDIN_CLIENT_ID,
       clientSecret: e.LINKEDIN_CLIENT_SECRET,

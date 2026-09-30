@@ -21,6 +21,7 @@ import { initialCommentStatus, newPostFromPlanned } from './posts.js';
 import { TimeInputError, formatLocal, minutesBetween, nextTickUtc, parseLocalDateTime, tickWindow } from './time.js';
 import { charCount, newId, textHash } from './util.js';
 import { isValidTimezone } from './config.js';
+import { ImageError, stageImage, type PostImage } from './image.js';
 
 /** Błąd narzędzia: czytelny opis + kod, bez sekretów. */
 export class ToolError extends Error {
@@ -49,6 +50,12 @@ export const PreviewPostInput = z.object({
   comment_text_no_link: text().optional().describe('Zatwierdzona wersja komentarza bez linku (gdy link nie dotrze na czas).'),
   if_no_link: z.enum(IF_NO_LINK).optional().describe('post_without_link albo skip.'),
   comment_delay_min: z.number().int().min(0).max(1440).optional().describe('Opóźnienie komentarza w minutach (domyślnie 10).'),
+  image_path: z
+    .string()
+    .max(1000)
+    .optional()
+    .describe('Opcjonalny obraz: pełna ścieżka do pliku JPG/PNG/GIF na dysku użytkownika, np. C:\\Users\\...\\grafika.png.'),
+  image_alt: z.string().max(4000).optional().describe('Tekst alternatywny obrazu (dla czytników ekranu).'),
 });
 
 export const PreviewSeriesInput = z.object({
@@ -75,6 +82,9 @@ export const UpdatePostInput = z.object({
   comment_text: text().optional(),
   comment_text_no_link: text().optional(),
   if_no_link: z.enum(IF_NO_LINK).optional(),
+  image_path: z.string().max(1000).optional().describe('Nowy obraz (pełna ścieżka JPG/PNG/GIF).'),
+  image_alt: z.string().max(4000).optional().describe('Nowy tekst alternatywny obrazu.'),
+  remove_image: z.boolean().optional().describe('true = usuń obraz z posta.'),
 });
 
 export const SetCommentLinkInput = z.object({ id: z.string().min(1), url: z.string().min(1).max(2000) });
@@ -171,6 +181,10 @@ export class LinkedInService {
       this.checkTexts(chk, postText, commentText, p.link_mode, noLink, ifNoLink);
       if (p.link_mode !== 'later' && p.if_no_link) chk.warnings.push('if_no_link jest ignorowane, gdy link_mode = none.');
 
+      let image: PostImage | null = null;
+      if (p.image_path?.trim()) image = this.checkImage(p.image_path, p.image_alt ?? '', chk);
+      else if (p.image_alt) chk.warnings.push('image_alt podano bez image_path - zignorowano.');
+
       const hash = textHash(postText);
       if (seenHashes.has(hash)) chk.errors.push(`Treść identyczna jak w poście nr ${seenHashes.get(hash)} tej serii.`);
       else seenHashes.set(hash, seq);
@@ -196,6 +210,7 @@ export class LinkedInService {
         comment: commentText
           ? { chars: charCount(commentText), link_mode: p.link_mode, if_no_link: ifNoLink, delay_min: p.comment_delay_min ?? this.cfg.commentDelayDefaultMin }
           : null,
+        image: image ? presentImage(image) : null,
         warnings: chk.warnings,
         errors: chk.errors,
       });
@@ -213,11 +228,13 @@ export class LinkedInService {
               commentTextNoLink: p.link_mode === 'later' ? noLink : null,
               ifNoLink,
               commentDelayMin: p.comment_delay_min ?? this.cfg.commentDelayDefaultMin,
+              image,
             }
           : null,
       );
     }
 
+    const withImage = out.filter((p) => p.image).length;
     const errorsTotal = out.reduce((n, p) => n + p.errors.length, 0);
     const warningsTotal = out.reduce((n, p) => n + p.warnings.length, 0);
     let planId: string | null = null;
@@ -237,6 +254,7 @@ export class LinkedInService {
     const summary = {
       posts: out.length,
       with_comment: out.filter((p) => p.comment).length,
+      with_image: withImage,
       errors: errorsTotal,
       warnings: warningsTotal,
       first_local: times[0] ? formatLocal(times[0], tz) : null,
@@ -354,7 +372,9 @@ export class LinkedInService {
     if (!EDITABLE_STATUSES.includes(post.status)) {
       throw await reject('not_editable', `Post ma status "${post.status}" - edycja jest możliwa tylko dla scheduled i missed.`);
     }
-    const fields = (['text', 'publish_at', 'comment_text', 'comment_text_no_link', 'if_no_link'] as const).filter((f) => args[f] !== undefined);
+    const fields = (
+      ['text', 'publish_at', 'comment_text', 'comment_text_no_link', 'if_no_link', 'image_path', 'image_alt', 'remove_image'] as const
+    ).filter((f) => args[f] !== undefined);
     if (fields.length === 0) throw await reject('nothing_to_update', 'Nie podano żadnego pola do zmiany.');
     if (post.status === 'scheduled' && minutesBetween(nowIso, post.publishAtUtc) < this.cfg.minLeadMin) {
       throw await reject('too_close_to_publish', `Do publikacji zostało mniej niż ${this.cfg.minLeadMin} min - zmiana nie jest już możliwa.`);
@@ -396,6 +416,18 @@ export class LinkedInService {
     if (args.comment_text_no_link !== undefined) patch.commentTextNoLink = newNoLink;
     if (post.linkMode === 'later' && newIfNoLink !== post.ifNoLink) patch.ifNoLink = newIfNoLink;
     if (post.linkMode !== 'later' && args.if_no_link) chk.warnings.push('if_no_link jest ignorowane, gdy link_mode = none.');
+
+    if (args.remove_image && args.image_path) {
+      chk.errors.push('Podaj albo image_path (nowy obraz), albo remove_image, nie oba naraz.');
+    } else if (args.image_path !== undefined) {
+      const img = this.checkImage(args.image_path, args.image_alt ?? post.image?.alt ?? '', chk);
+      if (img) patch.image = img;
+    } else if (args.remove_image) {
+      patch.image = null;
+    } else if (args.image_alt !== undefined) {
+      if (!post.image) chk.errors.push('Post nie ma obrazu - image_alt można zmienić tylko razem z obrazem.');
+      else patch.image = { ...post.image, alt: args.image_alt };
+    }
 
     if (chk.errors.length) throw await reject('validation_failed', 'Zmiana nie przeszła walidacji.', { errors: chk.errors, warnings: chk.warnings });
     if (post.status === 'missed') patch.status = 'scheduled';
@@ -499,6 +531,20 @@ export class LinkedInService {
     }
   }
 
+  private checkImage(imagePath: string, alt: string, chk: CheckedPost): PostImage | null {
+    try {
+      const img = stageImage(imagePath, this.cfg.paths.imagesDir, this.cfg.imageMaxBytes, normalizeText(alt).trim());
+      if (!img.alt) chk.warnings.push('Obraz nie ma tekstu alternatywnego (image_alt) - warto go dodać dla czytników ekranu.');
+      return img;
+    } catch (e) {
+      if (e instanceof ImageError) {
+        chk.errors.push(e.message);
+        return null;
+      }
+      throw e;
+    }
+  }
+
   private async checkDuplicate(chk: CheckedPost, hash: string, excludeId?: string) {
     const dups = await this.ctx.store.findByTextHash(hash, excludeId);
     if (dups.length) {
@@ -567,6 +613,7 @@ export function presentPost(p: Post) {
     comment_text_no_link: p.commentTextNoLink,
     if_no_link: p.ifNoLink,
     comment_delay_min: p.commentDelayMin,
+    image: p.image ? presentImage(p.image) : null,
     comment_url: p.commentUrl,
     comment_status: p.commentStatus,
     comment_due_local: p.commentDueUtc ? formatLocal(p.commentDueUtc, p.timezone) : null,
@@ -575,6 +622,10 @@ export function presentPost(p: Post) {
     last_error: p.lastError,
     comment_error: p.commentError,
   };
+}
+
+function presentImage(img: PostImage) {
+  return { file_name: img.originalName, mime: img.mime, bytes: img.bytes, width: img.width, height: img.height, alt: img.alt };
 }
 
 function presentEvent(e: PostEvent) {

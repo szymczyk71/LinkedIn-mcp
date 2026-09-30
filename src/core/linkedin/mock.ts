@@ -23,6 +23,8 @@ import {
 export const PUBLISH_MODES = ['ok', 'reject', 'timeout', 'ambiguous', 'unauthorized', 'rate_limited', 'network'] as const;
 export const COMMENT_MODES = ['ok', 'forbidden', 'reject', 'timeout', 'ambiguous', 'unauthorized'] as const;
 export const AUTH_MODES = ['ok', 'disconnected', 'no_post_permission'] as const;
+/** Wysyłanie obrazu odbywa się przed utworzeniem posta, więc błąd jest zawsze jednoznaczny (post nie powstaje). */
+export const IMAGE_MODES = ['ok', 'reject', 'network'] as const;
 
 const opSchema = <T extends readonly [string, ...string[]]>(modes: T) =>
   z.union([z.enum(modes), z.object({ mode: z.enum(modes), times: z.number().int().positive().optional() })]);
@@ -31,6 +33,7 @@ export const MockScenarioSchema = z.object({
   auth: z.enum(AUTH_MODES).optional(),
   publish: opSchema(PUBLISH_MODES).optional(),
   comment: opSchema(COMMENT_MODES).optional(),
+  image: opSchema(IMAGE_MODES).optional(),
   /** Opóźnienie odpowiedzi w ms (np. do obserwowania statusu "publishing"). */
   delayMs: z.number().int().min(0).max(120_000).optional(),
 });
@@ -48,6 +51,7 @@ export interface MockPost {
   text: string;
   idempotencyKey: string;
   createdAt: string;
+  image: { urn: string; sha256: string; mime: string; bytes: number; alt: string } | null;
   comments: MockComment[];
 }
 
@@ -67,8 +71,9 @@ export class MockLinkedIn implements LinkedInClient {
   readonly mode = 'mock' as const;
   private scenario: MockScenario;
   private state: MockState;
+  private pendingImage: MockPost['image'] = null;
   /** Liczniki wywołań, przydatne w testach. */
-  readonly calls = { checkAuth: 0, publishPost: 0, addComment: 0 };
+  readonly calls = { checkAuth: 0, publishPost: 0, addComment: 0, uploadImage: 0 };
 
   constructor(private readonly opts: MockOptions = {}) {
     this.scenario = MockScenarioSchema.parse(opts.scenario ?? {});
@@ -108,6 +113,16 @@ export class MockLinkedIn implements LinkedInClient {
     await this.delay(s);
     if (s.auth === 'disconnected') throw new LinkedInError('unauthorized', 'Atrapa: brak połączenia z LinkedIn.', 401);
     if (s.auth === 'no_post_permission') throw new LinkedInError('forbidden', 'Atrapa: brak uprawnienia w_member_social (403).', 403);
+    let imageUrn: string | null = null;
+    if (input.image) {
+      this.calls.uploadImage++;
+      const imageMode = this.takeMode('image', s);
+      if (!fs.existsSync(input.image.file)) throw new LinkedInError('rejected', 'Atrapa: brak pliku obrazu do wysłania.');
+      if (imageMode === 'reject') throw new LinkedInError('rejected', 'Atrapa: LinkedIn odrzucił obraz (400).', 400);
+      if (imageMode === 'network') throw new LinkedInError('network', 'Atrapa: błąd połączenia przy wysyłaniu obrazu.');
+      imageUrn = `urn:li:image:${newId('mockimg')}`;
+    }
+    this.pendingImage = input.image && imageUrn ? { urn: imageUrn, sha256: input.image.sha256, mime: input.image.mime, bytes: input.image.bytes, alt: input.image.alt } : null;
     switch (mode) {
       case 'reject':
         throw new LinkedInError('rejected', 'Atrapa: LinkedIn odrzucił post (422).', 422);
@@ -161,8 +176,10 @@ export class MockLinkedIn implements LinkedInClient {
       text: input.text,
       idempotencyKey: input.idempotencyKey,
       createdAt: new Date().toISOString(),
+      image: this.pendingImage,
       comments: [],
     };
+    this.pendingImage = null;
     this.state.posts.push(p);
     this.saveState();
     return p;
@@ -188,7 +205,7 @@ export class MockLinkedIn implements LinkedInClient {
   }
 
   /** Zwraca tryb operacji i zmniejsza licznik `times`; po wyczerpaniu wraca do "ok". */
-  private takeMode(op: 'publish' | 'comment', s: MockScenario): string {
+  private takeMode(op: 'publish' | 'comment' | 'image', s: MockScenario): string {
     const v = s[op];
     if (v === undefined) return 'ok';
     if (typeof v === 'string') return v;
