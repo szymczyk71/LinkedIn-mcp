@@ -49,11 +49,16 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v === undefined || v.trim() === '' ? '202609' : v.trim()))
     .pipe(z.string().regex(/^\d{6}$/, 'format RRRRMM, np. 202609')),
-  LINKEDIN_POST_VISIBILITY: z
+  /** Numer strony firmy (z adresu linkedin.com/company/<numer>/admin). Posty wychodzą w jej imieniu. */
+  LINKEDIN_ORGANIZATION_ID: z
     .string()
     .optional()
-    .transform((v) => (v === undefined || v.trim() === '' ? 'PUBLIC' : v.trim().toUpperCase()))
-    .pipe(z.enum(['PUBLIC', 'CONNECTIONS'])),
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .pipe(z.string().regex(/^\d+$/, 'sam numer strony, np. 12345678').optional()),
+  /** Nazwa strony do wyświetlania (np. KTBnet) - tylko opisowo. */
+  LINKEDIN_ORGANIZATION_NAME: optionalString,
+  /** Role na stronie firmy, które pozwalają korzystać z planera. */
+  LINKEDIN_ALLOWED_ROLES: optionalString,
   LINKEDIN_SCOPES: optionalString,
   /** Tylko do testów: podmiana adresów LinkedIn na lokalną atrapę HTTP. */
   LINKEDIN_API_BASE: optionalString,
@@ -107,7 +112,9 @@ export interface Config {
     clientSecret?: string;
     redirectUri: string;
     apiVersion: string;
-    visibility: 'PUBLIC' | 'CONNECTIONS';
+    organizationId: string | null;
+    organizationName: string | null;
+    allowedRoles: string[];
     scopes: string[];
     apiBase: string;
     oauthBase: string;
@@ -218,8 +225,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { envFile
         e.LINKEDIN_REDIRECT_URI ??
         (publicBaseUrl ? `${publicBaseUrl}/oauth/callback` : `http://${LOOPBACK_HOST}:${e.WORKER_PORT}/oauth/callback`),
       apiVersion: e.LINKEDIN_API_VERSION,
-      visibility: e.LINKEDIN_POST_VISIBILITY,
-      scopes: (e.LINKEDIN_SCOPES ?? 'openid profile w_member_social').split(/[\s,]+/).filter(Boolean),
+      organizationId: e.LINKEDIN_ORGANIZATION_ID ?? null,
+      organizationName: e.LINKEDIN_ORGANIZATION_NAME ?? null,
+      allowedRoles: (e.LINKEDIN_ALLOWED_ROLES ?? 'ADMINISTRATOR,CONTENT_ADMINISTRATOR')
+        .split(/[\s,]+/)
+        .map((r) => r.trim().toUpperCase())
+        .filter(Boolean),
+      scopes: (e.LINKEDIN_SCOPES ?? 'r_organization_admin w_organization_social').split(/[\s,]+/).filter(Boolean),
       apiBase: (e.LINKEDIN_API_BASE ?? 'https://api.linkedin.com').replace(/\/$/, ''),
       oauthBase: (e.LINKEDIN_OAUTH_BASE ?? 'https://www.linkedin.com').replace(/\/$/, ''),
     },
@@ -266,7 +278,8 @@ export function describeConfig(c: Config): Record<string, unknown> {
     linkedinClientConfigured: Boolean(c.linkedin.clientId && c.linkedin.clientSecret),
     redirectUri: c.linkedin.redirectUri,
     apiVersion: c.linkedin.apiVersion,
-    postVisibility: c.linkedin.visibility,
+    organizationId: c.linkedin.organizationId,
+    allowedRoles: c.linkedin.allowedRoles.join(','),
     scopes: c.linkedin.scopes.join(' '),
     encryptionKeyStore: c.encKeyFromEnv ? 'env' : 'windows-credential-manager',
   };

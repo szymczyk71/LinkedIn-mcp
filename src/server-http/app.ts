@@ -52,7 +52,6 @@ function clientIp(req: http.IncomingMessage): string {
 export async function startHttpApp(core: ServerCore, log: Logger, opts: { port?: number; host?: string; fetchImpl?: typeof fetch } = {}): Promise<HttpApp> {
   const oauth = new OAuthServer(core, log, opts.fetchImpl);
   const uploads = new UploadPages(core, log);
-  const service = new LinkedInService(core, 'mcp');
   const limiter = new RateLimiter(core.config.http.rateLimitPerMin);
   const authLimiter = new RateLimiter(Math.max(10, Math.floor(core.config.http.rateLimitPerMin / 4)));
 
@@ -88,6 +87,9 @@ export async function startHttpApp(core: ServerCore, log: Logger, opts: { port?:
       }
       const token = await oauth.verifyBearer(req.headers.authorization);
       if (!token) return oauth.unauthorized(res);
+      const user = await core.db.getUser(token.personUrn);
+      // Każde zapytanie działa w imieniu zalogowanego administratora (autorstwo postów, audyt).
+      const service = new LinkedInService(core, 'mcp', { personUrn: token.personUrn, name: user?.name ?? null });
       let body: unknown;
       try {
         body = JSON.parse((await readBody(req, 2_000_000)).toString('utf8'));

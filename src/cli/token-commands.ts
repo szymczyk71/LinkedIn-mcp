@@ -2,7 +2,8 @@ import type { Config } from '../core/config.js';
 import { SqliteStore } from '../core/db/sqlite-store.js';
 import { AuditLog } from '../core/audit.js';
 import { LiveLinkedIn } from '../core/linkedin/live.js';
-import { createTokenStore, fetchUserInfo, saveLogin } from '../core/linkedin/oauth.js';
+import { SingleAccount } from '../core/accounts.js';
+import { buildTokenRecord, createTokenStore, fetchMemberIdentity, organizationUrnFromConfig, resolveAccess, saveLogin } from '../core/linkedin/oauth.js';
 import { formatLocal } from '../core/time.js';
 
 /** Czyta sekret: z potoku (stdin) albo z klawiatury bez wyświetlania znaków. */
@@ -53,15 +54,20 @@ export async function tokenImport(config: Config, args: string[]): Promise<Recor
   const token = await readSecret('Wklej token dostępu z LinkedIn Developer Portal (nie będzie widoczny) i naciśnij Enter: ');
   if (token.length < 20) throw new Error('To nie wygląda na token dostępu (za krótki).');
 
-  const user = await fetchUserInfo(config, token); // weryfikacja tokenu + identyfikator autora
+  // Weryfikacja tokenu: kim jest osoba i czy ma dozwoloną rolę na stronie firmy.
+  const identity = await fetchMemberIdentity(config, token);
+  const access = resolveAccess(config, identity);
   const store = new SqliteStore(config.paths.dbFile);
   try {
-    const saved = await saveLogin(createTokenStore(config), store, { accessToken: token, expiresInSec: Math.round(days * 86_400), scopes }, user, 'import');
-    await new AuditLog(store, config.paths.auditLogFile).record('cli', 'token_import', 'ok', saved.personUrn, { expiresAt: saved.expiresAt, scopes });
+    const rec = buildTokenRecord({ accessToken: token, expiresInSec: Math.round(days * 86_400), scopes }, identity, access, 'import');
+    const saved = await saveLogin(new SingleAccount(createTokenStore(config)), store, rec);
+    await new AuditLog(store, config.paths.auditLogFile).record('cli', 'token_import', 'ok', saved.personUrn, { expiresAt: saved.expiresAt, scopes, roles: saved.roles });
     return {
       imported: true,
       profile_name: saved.profileName,
       person_urn: saved.personUrn,
+      roles: saved.roles,
+      organization_urn: saved.organizationUrn,
       expires_at_local: formatLocal(saved.expiresAt, config.defaultTimezone),
       scopes,
       note: 'Datę wygaśnięcia przyjęto z --expires-in-days (domyślnie 60 dni) - sprawdź ją w Developer Portal.',
@@ -93,12 +99,13 @@ export async function tokenClear(config: Config): Promise<Record<string, unknown
   return { removed, message: removed ? 'Token LinkedIn usunięty z tego komputera.' : 'Nie było zapisanego tokenu.' };
 }
 
-/** Sprawdza token prawdziwym wywołaniem userinfo (1 wywołanie API). */
+/** Sprawdza token i role na stronie firmy prawdziwym wywołaniem API. */
 export async function tokenVerify(config: Config): Promise<Record<string, unknown>> {
   const rec = await createTokenStore(config).load();
   if (!rec) return { valid: false, message: 'Brak tokenu. Zaloguj się: http://127.0.0.1:' + config.workerPort + '/oauth/start' };
-  const user = await fetchUserInfo(config, rec.accessToken);
-  return { valid: true, profile_name: user.name, person_urn: `urn:li:person:${user.sub}`, matches_saved: `urn:li:person:${user.sub}` === rec.personUrn };
+  const identity = await fetchMemberIdentity(config, rec.accessToken);
+  const access = resolveAccess(config, identity);
+  return { valid: true, profile_name: identity.name, person_urn: identity.personUrn, roles: access.roles, organization_urn: access.organizationUrn, matches_saved: identity.personUrn === rec.personUrn };
 }
 
 /** Usuwa post z LinkedIn (sprzątanie po teście) i oznacza go w kolejce. */
@@ -113,10 +120,10 @@ export async function deleteLivePost(config: Config, postId: string | undefined,
       return { deleted: false, post_url: post.postUrl, message: `Aby usunąć post z LinkedIn, powtórz komendę z --yes: npm run cli -- linkedin delete-post ${postId} --yes` };
     }
     const client = new LiveLinkedIn({
-      tokens: createTokenStore(config),
+      accounts: new SingleAccount(createTokenStore(config)),
+      organizationUrn: organizationUrnFromConfig(config),
       apiBase: config.linkedin.apiBase,
       apiVersion: config.linkedin.apiVersion,
-      visibility: config.linkedin.visibility,
     });
     await client.deletePost(post.linkedinPostUrn);
     const now = new Date().toISOString();

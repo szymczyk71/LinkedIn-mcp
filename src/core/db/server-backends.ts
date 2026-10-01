@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import { validateImage, sha256Hex, type ImageRepo, type PostImage } from '../image.js';
 import type { PauseBackend, PauseInfo } from '../pause.js';
-import type { SecretBackend } from '../token-store.js';
+import { pickFrom, type AccountInfo, type AccountStatus, type Accounts, type PickOptions } from '../accounts.js';
+import { TokenStore, type KeyProvider, type SecretBackend, type TokenRecord } from '../token-store.js';
 import type { ImageUploadTicket, UploadRegistry, UploadState } from '../uploads.js';
-import type { ServerData } from './server-data.js';
+import type { OrgUser, ServerData } from './server-data.js';
 
 /** Obrazy w bazie (server-http). `PostImage.file` = "db:<sha256>". */
 export class DbImageRepo implements ImageRepo {
@@ -55,6 +56,68 @@ export class DbPause implements PauseBackend {
   async clear(): Promise<PauseInfo> {
     await this.db.setSetting('pause', null, new Date().toISOString());
     return { paused: false, since: null, reason: null };
+  }
+}
+
+/**
+ * Konta administratorów strony w bazie (server-http): tabela org_users + osobny zaszyfrowany token LinkedIn
+ * każdej osoby w tabeli secrets ("linkedin_token:<urn:li:person:...>").
+ */
+export class DbAccounts implements Accounts {
+  constructor(
+    private readonly db: ServerData,
+    private readonly keys: KeyProvider,
+  ) {}
+
+  private tokenStore(personUrn: string): TokenStore {
+    return new TokenStore(new DbSecret(this.db, `linkedin_token:${personUrn}`), this.keys);
+  }
+
+  async saveLogin(rec: TokenRecord, nowUtc: string): Promise<void> {
+    await this.tokenStore(rec.personUrn).save(rec);
+    await this.db.upsertUserLogin({ personUrn: rec.personUrn, name: rec.profileName, roles: rec.roles }, nowUtc);
+  }
+
+  async get(personUrn: string): Promise<TokenRecord | null> {
+    return this.tokenStore(personUrn).load();
+  }
+
+  async info(personUrn: string): Promise<AccountInfo | null> {
+    const u = await this.db.getUser(personUrn);
+    return u ? this.toInfo(u) : null;
+  }
+
+  async list(): Promise<AccountInfo[]> {
+    return Promise.all((await this.db.listUsers()).map((u) => this.toInfo(u)));
+  }
+
+  private async toInfo(u: OrgUser): Promise<AccountInfo> {
+    const t = await this.tokenStore(u.personUrn).info();
+    return {
+      personUrn: u.personUrn,
+      name: u.name,
+      roles: u.roles,
+      status: u.status,
+      tokenPresent: t.present,
+      expiresAt: t.expiresAt,
+      lastLoginAt: u.lastLoginAt,
+      lastVerifiedAt: u.lastVerifiedAt,
+    };
+  }
+
+  async pick(opts: PickOptions, nowUtc: string): Promise<TokenRecord | null> {
+    return pickFrom(await this.list(), (urn) => this.get(urn), opts, nowUtc);
+  }
+
+  async setVerified(personUrn: string, status: AccountStatus, roles: string[] | null, nowUtc: string): Promise<void> {
+    await this.db.setUserStatus(personUrn, status, roles, nowUtc);
+    if (status !== 'active') await this.db.revokeTokensForPerson(personUrn, nowUtc);
+  }
+
+  async remove(personUrn: string): Promise<boolean> {
+    await this.db.revokeTokensForPerson(personUrn, new Date().toISOString());
+    await this.db.deleteSecret(`linkedin_token:${personUrn}`);
+    return this.db.deleteUser(personUrn);
   }
 }
 

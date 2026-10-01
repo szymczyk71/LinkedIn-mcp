@@ -4,7 +4,7 @@ Ten dokument jest jednocześnie instrukcją dla skilla (jak wywoływać narzędz
 
 ## Zasady projektowe
 
-- Serwer publikuje na LinkedIn wyłącznie przez oficjalne API, z profilu osobistego zalogowanego użytkownika.
+- Serwer publikuje na LinkedIn wyłącznie przez oficjalne API, **w imieniu strony firmy** (`LINKEDIN_ORGANIZATION_ID`). Korzystać mogą administratorzy tej strony z rolą `ADMINISTRATOR` albo `CONTENT_ADMINISTRATOR`; każdy loguje się swoim kontem LinkedIn.
 - Nie ma narzędzia do natychmiastowej publikacji. Każdy post ma termin co najmniej 5 minut w przyszłości względem chwili zatwierdzenia.
 - Zapis do kolejki następuje w dwóch krokach: **podgląd**, a potem **zatwierdzenie na podstawie identyfikatora planu**. Zatwierdzenie zapisuje dokładnie te treści, które zostały pokazane w podglądzie.
 - Logowanie do LinkedIn (OAuth) odbywa się na stronie serwera w przeglądarce, nigdy przez narzędzia MCP. Tokeny nie są zwracane przez żadne narzędzie.
@@ -96,19 +96,24 @@ Parametry: `id`, `url` (adres http lub https). Serwer podstawia adres w miejsce 
 - `linkedin_preview_series` zwraca dla każdego posta dodatkowo `publish_effective_local`, czyli faktyczną godzinę przebiegu, oraz `comment` (długość, `link_mode`, `if_no_link`, opóźnienie). Jeśli seria ma błędy, zwraca `plan_id: null` i niczego nie zapisuje. Komentarz ma limit 1250 znaków. Gdy przy `link_mode: later` podano tylko `comment_text_no_link`, `if_no_link` przyjmuje domyślnie wartość `post_without_link`.
 - `linkedin_commit_series` przy zatwierdzeniu sprawdza jeszcze raz minimalne wyprzedzenie terminu i duplikaty, bo od podglądu mogło minąć do 30 minut. Jeśli któryś warunek nie jest spełniony, zwraca błąd `plan_no_longer_valid`.
 - `linkedin_list_queue`: `from` i `to` to czas lokalny w strefie domyślnej, w formacie `RRRR-MM-DD` (cały dzień) lub `RRRR-MM-DDTGG:MM[:SS]`.
-- `linkedin_auth_status` zwraca dodatkowo `post_visibility` (`PUBLIC`/`CONNECTIONS`) oraz `live_login`: stan prawdziwego logowania, także w trybie atrapy. `live_login` zawiera `present`, `profile_name`, `expires_at`, `days_left`, `scopes` i `can_comment`, ale nigdy samego tokenu. Wartość `can_comment` jest pamiętana osobno dla atrapy i dla prawdziwego konta.
+- `linkedin_auth_status` w trybie live opisuje stronę firmy (`profile_name`, `profile_url`, `organization_urn`). `expires_at` i `days_left` dotyczą logowania osoby, która pyta. Dodatkowo zwraca:
+  - `you`: imię, role na stronie i ważność logowania pytającego;
+  - `team`: wszyscy administratorzy, którzy połączyli planer (imię, role, status, czy logowanie jest ważne i do kiedy);
+  - `live_login` (`present`, `can_comment`) i `allowed_roles`.
+  Odpowiedź nigdy nie zawiera tokenów. `can_comment` dotyczy komentowania jako strona i jest pamiętane osobno dla atrapy i trybu live. `connected` i `can_post` są `true`, gdy **choć jeden** administrator ma ważne logowanie.
 - `linkedin_auth_status` zwraca dodatkowo `mode` (`mock`/`live`), `paused` i `warnings`. Ostrzeżenia dotyczą wygasania logowania (7 dni lub mniej), pauzy, braku połączenia i postów z błędem publikacji.
 - `linkedin_set_comment_link` działa, dopóki komentarz nie został wysłany. Link można też zmienić po publikacji posta, jeszcze przed dodaniem komentarza.
 
 ### Tryb live (prawdziwe LinkedIn)
 
 - Serwer używa API z dokumentacji na learn.microsoft.com (wersja `LINKEDIN_API_VERSION`, domyślnie `202609`, nagłówki `Linkedin-Version` i `X-Restli-Protocol-Version: 2.0.0`):
-  - post: `POST /rest/posts` z autorem `urn:li:person:{sub}`, gdzie `sub` pochodzi z `/v2/userinfo`;
+  - post: `POST /rest/posts` z autorem `urn:li:organization:{LINKEDIN_ORGANIZATION_ID}` i widocznością `PUBLIC`;
   - obraz: `POST /rest/images?action=initializeUpload`, a potem `PUT` pliku;
-  - komentarz: `POST /rest/socialActions/{post}/comments`.
+  - komentarz: `POST /rest/socialActions/{post}/comments` z `actor` równym stronie firmy;
+  - tożsamość i role: `GET /rest/organizationAcls?q=roleAssignee&state=APPROVED` (identyfikator osoby z pola `roleAssignee`) oraz opcjonalnie `GET /v2/me` (imię i nazwisko, jeśli aplikacja ma `r_basicprofile`).
 - Treść posta serwer zamienia na format „little”: znaki zastrzeżone `| { } @ [ ] ( ) < > # \ * _ ~` są escapowane, więc post ukazuje się dokładnie w takiej postaci, w jakiej był w podglądzie. Wyjątkiem są hashtagi `#słowo` na początku słowa, które zostają klikalne. Znak `@` jest zawsze zwykłym tekstem, więc serwer nie tworzy wzmianek. Komentarz jest wysyłany bez zmian.
-- Widoczność postów ustawia konfiguracja `LINKEDIN_POST_VISIBILITY`: `PUBLIC` albo `CONNECTIONS` (tylko kontakty pierwszego stopnia).
-- Logowanie odbywa się przez `/oauth/start` na workerze z zakresami `openid profile w_member_social`. Token jest zaszyfrowany (AES-256-GCM, klucz w Menedżerze poświadczeń Windows) i działa 60 dni. LinkedIn nie wydaje zwykłym aplikacjom tokenów odświeżania, więc po wygaśnięciu trzeba zalogować się ponownie. `linkedin_auth_status` ostrzega o tym 7 dni wcześniej.
+- Aplikacja LinkedIn musi mieć produkt **Community Management API** (wniosek do LinkedIn; nowa aplikacja bez innych produktów). Domyślne zakresy: `r_organization_admin w_organization_social`, a jeśli aplikacja je ma, także `r_basicprofile` i `w_organization_social_feed` (`LINKEDIN_SCOPES`).
+- Logowanie odbywa się przez `/oauth/start` na workerze (wersja lokalna) albo przez połączenie konektora (serwer). Token jest zaszyfrowany (AES-256-GCM, klucz w Menedżerze poświadczeń Windows) i działa 60 dni. LinkedIn nie wydaje zwykłym aplikacjom tokenów odświeżania, więc po wygaśnięciu trzeba zalogować się ponownie. `linkedin_auth_status` ostrzega o tym 7 dni wcześniej.
 - Każdy post zapamiętuje tryb, w którym go zatwierdzono (`mock` albo `live`). Worker publikuje tylko posty ze swojego trybu. Post z innego trybu dostaje `failed` z kodem `mode_mismatch` i nie jest wysyłany.
 - Obrazy muszą mieć mniej niż 36 152 320 pikseli, a tekst alternatywny najwyżej 4086 znaków (zalecane poniżej 120).
 
@@ -158,8 +163,11 @@ Po przesłaniu `image_id` podaje się w `linkedin_preview_series` albo w `linked
   - odpowiedź `401` z `WWW-Authenticate: Bearer resource_metadata=…`;
   - metadane pod `/.well-known/oauth-protected-resource` i `/.well-known/oauth-authorization-server`;
   - rotacja tokenów odświeżania i unieważnienie całej rodziny tokenów przy ponownym użyciu starego tokenu odświeżania.
-- Użytkownik potwierdza tożsamość logowaniem LinkedIn (`openid profile w_member_social`). To samo logowanie zapisuje zaszyfrowany token LinkedIn do publikacji.
-- **Pierwsze konto LinkedIn, które się połączy, zostaje właścicielem.** Inne konta dostają odmowę. Właściciela resetuje komenda administracyjna `server owner-reset`.
+- Użytkownik potwierdza tożsamość logowaniem LinkedIn. Serwer sprawdza w `organizationAcls`, czy osoba ma na stronie firmy rolę z `LINKEDIN_ALLOWED_ROLES` (domyślnie `ADMINISTRATOR` i `CONTENT_ADMINISTRATOR`) w stanie `APPROVED`. Inne osoby dostają odmowę. To samo logowanie zapisuje zaszyfrowany token tej osoby.
+- **Role są sprawdzane ponownie** przy każdym odświeżeniu tokenu konektora (około co godzinę) i raz dziennie przez harmonogram. Osoba, której odebrano rolę na LinkedIn, traci dostęp (status `revoked`). Chwilowy błąd sieci nie odbiera dostępu.
+- **Wspólna kolejka:** wszyscy administratorzy widzą i mogą zmieniać wszystkie posty. Każdy post zapisuje `created_by`, `updated_by` i `published_by`; widać je w `linkedin_get_post` i w zmianach.
+- **Którym tokenem publikować:** post wysyłany jest tokenem autora. Gdy jego logowanie wygasło albo dostęp odebrano, idzie tokenem innego aktywnego administratora, a komentarz (jako strona) preferencyjnie tokenem osoby z rolą `ADMINISTRATOR`, bo dokumentacja Comments API nie wymienia `CONTENT_ADMINISTRATOR`. Jeśli nikt nie ma ważnego logowania, post dostaje `failed` z kodem `linkedin_unauthorized`.
+- Użytkownicy są w tabeli `org_users` w PostgreSQL. Administracja: `server users list | block | unblock | remove`. Zablokowane konto traci dostęp od razu i nie zaloguje się ponownie.
 - Token odświeżania konektora działa najwyżej do wygaśnięcia logowania LinkedIn (60 dni). Potem Claude prosi o ponowne połączenie, które odnawia też token LinkedIn.
 - Obrazy przyjmowane są wyłącznie przez `image_id`. Pole `image_path` jest odrzucane, bo serwer nie czyta plików z własnego dysku.
 - Wszystkie dane są w PostgreSQL: kolejka, historia, audyt, zdjęcia, zaszyfrowany token, dane OAuth i bezpiecznik.

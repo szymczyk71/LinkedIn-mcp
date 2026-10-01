@@ -25,6 +25,9 @@ export const POST_COLUMNS: Record<keyof PostPatch, string> = {
   publishedAtUtc: 'published_at_utc',
   lastError: 'last_error_json',
   commentError: 'comment_error_json',
+  updatedBy: 'updated_by',
+  updatedByName: 'updated_by_name',
+  publishedBy: 'published_by',
 };
 export const JSON_FIELDS = new Set<keyof PostPatch>(['lastError', 'commentError', 'image']);
 
@@ -51,6 +54,11 @@ export function rowToPost(r: Row): Post {
     commentDelayMin: r.comment_delay_min as number,
     image: parseJson(r.image_json),
     mode: (r.mode as Post['mode']) ?? 'mock',
+    createdBy: (r.created_by as string | null) ?? null,
+    createdByName: (r.created_by_name as string | null) ?? null,
+    updatedBy: (r.updated_by as string | null) ?? null,
+    updatedByName: (r.updated_by_name as string | null) ?? null,
+    publishedBy: (r.published_by as string | null) ?? null,
     commentUrl: (r.comment_url as string | null) ?? null,
     commentStatus: r.comment_status as Post['commentStatus'],
     commentDueUtc: (r.comment_due_utc as string | null) ?? null,

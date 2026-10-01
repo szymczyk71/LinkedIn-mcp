@@ -201,6 +201,7 @@ export class Scheduler {
       const res = await linkedin.publishPost({
         text: claimed.text,
         idempotencyKey: claimed.idempotencyKey,
+        actAs: claimed.createdBy,
         ...(claimed.image
           ? { image: { data: imageData!, mime: claimed.image.mime, sha256: claimed.image.sha256, bytes: claimed.image.bytes, alt: claimed.image.alt } }
           : {}),
@@ -212,11 +213,11 @@ export class Scheduler {
       const done = await store.transitionPost(
         post.id,
         ['publishing', 'failed'],
-        { status: 'published', linkedinPostUrn: res.postUrn, postUrl: res.postUrl, publishedAtUtc: now, commentDueUtc, lastError: null },
+        { status: 'published', linkedinPostUrn: res.postUrn, postUrl: res.postUrl, publishedAtUtc: now, commentDueUtc, lastError: null, publishedBy: res.publishedBy ?? null },
         now,
       );
       await store.addEvent(post.id, 'published', { postUrl: res.postUrl, commentDueUtc }, now);
-      await audit.record('scheduler', 'publish_post', 'ok', post.id, { postUrn: res.postUrn, postUrl: res.postUrl });
+      await audit.record('scheduler', 'publish_post', 'ok', post.id, { postUrn: res.postUrn, postUrl: res.postUrl, publishedBy: res.publishedBy ?? null, createdBy: claimed.createdBy });
       this.log.info('Opublikowano post', { postId: post.id, postUrl: res.postUrl });
       return done ? 'published' : 'failed';
     } catch (e) {
@@ -261,11 +262,12 @@ export class Scheduler {
         postUrn: claimed.linkedinPostUrn!,
         text: decision.text,
         idempotencyKey: `${claimed.idempotencyKey}:comment`,
+        actAs: claimed.createdBy,
       });
       const t = this.nowIso();
       await store.transitionPost(post.id, ['published'], { commentStatus: 'done', linkedinCommentUrn: res.commentUrn, commentError: null }, t);
       await store.addEvent(post.id, 'comment_done', { usedFallback: decision.usedFallback }, t);
-      await audit.record('scheduler', 'comment', 'ok', post.id, { commentUrn: res.commentUrn, usedFallback: decision.usedFallback });
+      await audit.record('scheduler', 'comment', 'ok', post.id, { commentUrn: res.commentUrn, usedFallback: decision.usedFallback, publishedBy: res.publishedBy ?? null });
       await this.setCanComment('yes');
       return 'done';
     } catch (e) {

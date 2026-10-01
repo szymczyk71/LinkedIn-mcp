@@ -120,6 +120,14 @@ const MIGRATIONS: string[] = [
     SELECT 'mock', person_urn, profile_name, profile_url, expires_at, scopes_json, can_comment, updated_at FROM auth_meta;
   DROP TABLE auth_meta;
   `,
+  // 5: autorstwo postów (wspólna kolejka zespołu)
+  `
+  ALTER TABLE posts ADD COLUMN created_by TEXT;
+  ALTER TABLE posts ADD COLUMN created_by_name TEXT;
+  ALTER TABLE posts ADD COLUMN updated_by TEXT;
+  ALTER TABLE posts ADD COLUMN updated_by_name TEXT;
+  ALTER TABLE posts ADD COLUMN published_by TEXT;
+  `,
 ];
 
 export class SqliteStore implements Store {
@@ -183,11 +191,11 @@ export class SqliteStore implements Store {
       this.db.prepare('INSERT INTO series (id, plan_id, created_at) VALUES (?, ?, ?)').run(seriesId, planId, nowUtc);
       const insert = this.db.prepare(
         `INSERT INTO posts (id, series_id, seq, text, text_hash, publish_at_utc, timezone, status, comment_text, link_mode,
-           comment_text_no_link, if_no_link, comment_delay_min, image_json, mode, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
+           comment_text_no_link, if_no_link, comment_delay_min, image_json, mode, created_by, created_by_name, comment_url, comment_status, comment_due_utc, comment_claimed_at, idempotency_key,
            linkedin_post_urn, post_url, linkedin_comment_urn, published_at_utc, last_error_json, comment_error_json,
            version, created_at, updated_at)
          VALUES (@id, @seriesId, @seq, @text, @textHash, @publishAtUtc, @timezone, @status, @commentText, @linkMode,
-           @commentTextNoLink, @ifNoLink, @commentDelayMin, @image, @mode, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
+           @commentTextNoLink, @ifNoLink, @commentDelayMin, @image, @mode, @createdBy, @createdByName, @commentUrl, @commentStatus, @commentDueUtc, @commentClaimedAt, @idempotencyKey,
            @linkedinPostUrn, @postUrl, @linkedinCommentUrn, @publishedAtUtc, @lastError, @commentError,
            1, @now, @now)`,
       );

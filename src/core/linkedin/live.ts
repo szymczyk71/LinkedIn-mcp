@@ -1,5 +1,6 @@
 import { escapeLittle } from '../little.js';
-import type { TokenRecord, TokenStore } from '../token-store.js';
+import type { Accounts, PickOptions } from '../accounts.js';
+import type { TokenRecord } from '../token-store.js';
 import {
   LinkedInError,
   type AuthInfo,
@@ -16,17 +17,19 @@ import {
  * - Posts API:     POST {api}/rest/posts, nagłówki Linkedin-Version (RRRRMM) i X-Restli-Protocol-Version: 2.0.0,
  *                  lifecycleState PUBLISHED (jedyna wartość przy tworzeniu), ID posta w nagłówku x-restli-id
  * - little format: commentary z escapowanymi znakami zastrzeżonymi (little.ts)
- * - Images API:    POST {api}/rest/images?action=initializeUpload (owner = urn:li:person), PUT pliku na uploadUrl
+ * - Images API:    POST {api}/rest/images?action=initializeUpload (owner = urn:li:organization), PUT pliku na uploadUrl
  *                  z nagłówkiem Authorization, post z content.media { id, altText }
  * - Comments API:  POST {api}/rest/socialActions/{postUrn}/comments  { actor, object, message: { text } }
- * - userinfo:      GET {api}/v2/userinfo (OpenID) -> sub; autor = urn:li:person:{sub}
+ * Autor posta, właściciel obrazu i autor komentarza = strona firmy (urn:li:organization:...), uprawnienie
+ * w_organization_social; żądanie wysyła token jednego z administratorów strony (Accounts.pick).
  */
 
 export interface LiveOptions {
-  tokens: TokenStore;
+  accounts: Accounts;
+  /** Strona firmy z konfiguracji; gdy brak - z rekordu logowania. */
+  organizationUrn: string | null;
   apiBase: string;
   apiVersion: string;
-  visibility: 'PUBLIC' | 'CONNECTIONS';
   timeoutMs?: number;
   uploadTimeoutMs?: number;
   /** Ile czekać na przetworzenie obrazu przed utworzeniem posta. */
@@ -44,31 +47,35 @@ export class LiveLinkedIn implements LinkedInClient {
     this.f = o.fetchImpl ?? fetch;
   }
 
-  /** Dane z tokenu zapisane przy logowaniu - bez wywołania API (limit 150 wywołań dziennie). */
+  /** Czy jakikolwiek administrator ma ważne logowanie - bez wywołania API (limity LinkedIn). */
   async checkAuth(): Promise<AuthInfo> {
-    const rec = await this.o.tokens.load().catch(() => null);
-    const disconnected: AuthInfo = { connected: false, personUrn: null, profileName: null, profileUrl: null, expiresAt: rec?.expiresAt ?? null, scopes: rec?.scopes ?? [], canPost: false };
-    if (!rec || new Date(rec.expiresAt).getTime() <= Date.now()) return disconnected;
+    const rec = await this.o.accounts.pick({}, new Date().toISOString()).catch(() => null);
+    if (!rec) return { connected: false, personUrn: null, profileName: null, profileUrl: null, expiresAt: null, scopes: [], canPost: false };
+    const org = this.org(rec);
     return {
       connected: true,
-      personUrn: rec.personUrn,
+      personUrn: org,
       profileName: rec.profileName,
-      profileUrl: null,
+      profileUrl: `https://www.linkedin.com/company/${org.split(':').pop()}/`,
       expiresAt: rec.expiresAt,
       scopes: rec.scopes,
-      canPost: rec.scopes.length === 0 || rec.scopes.includes('w_member_social'),
+      canPost: rec.scopes.length === 0 || rec.scopes.includes('w_organization_social'),
     };
   }
 
+  private org(rec: TokenRecord): string {
+    return this.o.organizationUrn ?? rec.organizationUrn;
+  }
+
   async publishPost(input: PublishInput): Promise<PublishResult> {
-    const rec = await this.token();
+    const rec = await this.token({ prefer: input.actAs });
     let media: { id: string; altText?: string } | undefined;
     if (input.image) media = await this.uploadImage(rec, input.image);
 
     const body: Record<string, unknown> = {
-      author: rec.personUrn,
+      author: this.org(rec),
       commentary: escapeLittle(input.text),
-      visibility: this.o.visibility,
+      visibility: 'PUBLIC',
       distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
       lifecycleState: 'PUBLISHED',
       isReshareDisabledByAuthor: false,
@@ -79,28 +86,29 @@ export class LiveLinkedIn implements LinkedInClient {
     if (res.status !== 201 || !urn) {
       throw new LinkedInError('ambiguous', `LinkedIn odpowiedział ${res.status} bez identyfikatora posta - post mógł powstać.`, res.status);
     }
-    return { postUrn: urn, postUrl: `https://www.linkedin.com/feed/update/${urn}/` };
+    return { postUrn: urn, postUrl: `https://www.linkedin.com/feed/update/${urn}/`, publishedBy: rec.personUrn };
   }
 
   async addComment(input: CommentInput): Promise<CommentResult> {
-    const rec = await this.token();
+    // Komentarz jako strona: preferujemy rolę ADMINISTRATOR (Comments API nie wymienia CONTENT_ADMINISTRATOR).
+    const rec = await this.token({ prefer: input.actAs, preferRoles: ['ADMINISTRATOR'] });
     const res = await this.call(
       rec,
       'POST',
       `/rest/socialActions/${encodeURIComponent(input.postUrn)}/comments`,
-      { actor: rec.personUrn, object: input.postUrn, message: { text: input.text } },
+      { actor: this.org(rec), object: input.postUrn, message: { text: input.text } },
       'create',
     );
     const body = (await res.json().catch(() => null)) as { commentUrn?: string; id?: string } | null;
     const id = res.headers.get('x-restli-id') ?? body?.id;
     const commentUrn = body?.commentUrn ?? (id ? `urn:li:comment:(${input.postUrn},${id})` : null);
     if (!commentUrn) throw new LinkedInError('ambiguous', `LinkedIn odpowiedział ${res.status} bez identyfikatora komentarza - komentarz mógł powstać.`, res.status);
-    return { commentUrn };
+    return { commentUrn, publishedBy: rec.personUrn };
   }
 
   /** Usunięcie posta (sprzątanie po teście). Idempotentne według dokumentacji (204 także dla usuniętego). */
   async deletePost(postUrn: string): Promise<void> {
-    const rec = await this.token();
+    const rec = await this.token({});
     await this.call(rec, 'DELETE', `/rest/posts/${encodeURIComponent(postUrn)}`, undefined, 'before_send', { 'X-RestLi-Method': 'DELETE' });
   }
 
@@ -109,7 +117,7 @@ export class LiveLinkedIn implements LinkedInClient {
   private async uploadImage(rec: TokenRecord, img: PublishImage): Promise<{ id: string; altText?: string }> {
     // Wszystko przed utworzeniem posta: błędy są jednoznaczne (post na pewno nie powstał).
     try {
-      const init = await this.call(rec, 'POST', '/rest/images?action=initializeUpload', { initializeUploadRequest: { owner: rec.personUrn } }, 'before_send');
+      const init = await this.call(rec, 'POST', '/rest/images?action=initializeUpload', { initializeUploadRequest: { owner: this.org(rec) } }, 'before_send');
       const j = (await init.json()) as { value?: { uploadUrl?: string; image?: string } };
       const uploadUrl = j.value?.uploadUrl;
       const imageUrn = j.value?.image;
@@ -138,7 +146,7 @@ export class LiveLinkedIn implements LinkedInClient {
 
   /**
    * Images API przetwarza obraz asynchronicznie; post utworzony przed zakończeniem może nie być widoczny.
-   * Sprawdzamy status (GET /rest/images/{urn}); jeśli token z samym w_member_social nie ma prawa do GET (403),
+   * Sprawdzamy status (GET /rest/images/{urn}); jeśli token nie ma prawa do GET (403 - np. bez uprawnienia do odczytu obrazów),
    * czekamy krótko i idziemy dalej.
    */
   private async waitForImage(rec: TokenRecord, imageUrn: string): Promise<void> {
@@ -202,10 +210,14 @@ export class LiveLinkedIn implements LinkedInClient {
     throw classify(res.status, await safeText(res), stage, path);
   }
 
-  private async token(): Promise<TokenRecord> {
-    const rec = await this.o.tokens.load();
-    if (!rec) throw new LinkedInError('unauthorized', 'Brak logowania do LinkedIn. Zaloguj się: http://127.0.0.1:47811/oauth/start');
-    if (new Date(rec.expiresAt).getTime() <= Date.now()) throw new LinkedInError('unauthorized', `Token LinkedIn wygasł ${rec.expiresAt}. Zaloguj się ponownie.`);
+  private async token(opts: PickOptions): Promise<TokenRecord> {
+    const rec = await this.o.accounts.pick(opts, new Date().toISOString());
+    if (!rec) {
+      throw new LinkedInError(
+        'unauthorized',
+        'Żaden administrator strony nie ma ważnego logowania do LinkedIn. Połącz ponownie konektor (albo zaloguj się w wersji lokalnej).',
+      );
+    }
     return rec;
   }
 }

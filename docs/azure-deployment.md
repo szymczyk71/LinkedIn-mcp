@@ -1,6 +1,6 @@
 # Wdrożenie w Azure (wariant server-http)
 
-Instrukcja zakłada **jedno wdrożenie dla jednej osoby**: aplikacja w Azure Container Apps (jedna, stale działająca replika z harmonogramem), baza Azure Database for PostgreSQL i sekrety w Key Vault. Opis korzystania z aplikacji jest w [user-guide.md](user-guide.md).
+Instrukcja zakłada **jedno wdrożenie dla zespołu administratorów jednej strony firmy** (posty wychodzą jako strona): aplikacja w Azure Container Apps (jedna, stale działająca replika z harmonogramem), baza Azure Database for PostgreSQL i sekrety w Key Vault. Opis korzystania z aplikacji jest w [user-guide.md](user-guide.md).
 
 > Polecenia są przykładowe. Przed uruchomieniem sprawdź nazwy, region i ceny w [kalkulatorze Azure](https://azure.microsoft.com/pricing/calculator/). Nic nie powstaje, dopóki sam nie wykonasz poleceń.
 
@@ -96,7 +96,7 @@ az containerapp create -g $RG -n $APP --environment $ENV `
   --image $IMAGE --registry-server "$ACR.azurecr.io" --registry-identity system `
   --system-assigned --ingress external --target-port 8080 `
   --min-replicas 1 --max-replicas 1 --cpu 0.25 --memory 0.5Gi `
-  --env-vars LINKEDIN_MODE=mock DEFAULT_TIMEZONE=Europe/Warsaw LINKEDIN_CLIENT_ID="<Client ID>" LINKEDIN_POST_VISIBILITY=PUBLIC
+  --env-vars LINKEDIN_MODE=mock DEFAULT_TIMEZONE=Europe/Warsaw LINKEDIN_CLIENT_ID="<Client ID>" LINKEDIN_ORGANIZATION_ID="<numer strony KTBnet>" LINKEDIN_ORGANIZATION_NAME=KTBnet
 ```
 
 Nadaj tożsamości aplikacji prawo odczytu sekretów:
@@ -134,7 +134,13 @@ W aplikacji LinkedIn, w zakładce **Auth → Authorized redirect URLs**, dodaj:
 https://<FQDN>/oauth/callback
 ```
 
-Produkty (zakładka **Products**) pozostają te same: *Sign In with LinkedIn using OpenID Connect* i *Share on LinkedIn*.
+Aplikacja musi mieć produkt **Community Management API** (patrz [user-guide.md](user-guide.md), krok 1). Jeśli w zakładce **Auth** są uprawnienia `r_basicprofile` i `w_organization_social_feed`, ustaw w aplikacji:
+
+```powershell
+az containerapp update -g $RG -n $APP --set-env-vars LINKEDIN_SCOPES="r_organization_admin w_organization_social r_basicprofile w_organization_social_feed"
+```
+
+Numer strony (`LINKEDIN_ORGANIZATION_ID`) widać w adresie panelu administracyjnego strony: `linkedin.com/company/<numer>/admin`.
 
 ## 6. Konektor w Claude
 
@@ -142,7 +148,7 @@ Produkty (zakładka **Products**) pozostają te same: *Sign In with LinkedIn usi
 2. Adres: `https://<FQDN>/mcp`, potem **Add** → **Connect**.
 3. Ekran aplikacji pokaże, dokąd trafi dostęp (`claude.ai`). Kliknij **Kontynuuj przez LinkedIn**, zaloguj się i kliknij **Allow**.
 
-**Pierwsze konto LinkedIn, które się połączy, zostaje właścicielem planera.** Każde inne dostanie odmowę. Połącz się więc od razu po wdrożeniu.
+Dostęp mają osoby z rolą `ADMINISTRATOR` (Super admin) albo `CONTENT_ADMINISTRATOR` (Content admin) na stronie z `LINKEDIN_ORGANIZATION_ID`, w stanie `APPROVED`. Inne konta dostają odmowę. Role są sprawdzane ponownie co godzinę (przy odświeżaniu tokenu) i raz dziennie. Każda osoba z zespołu łączy konektor sama; przy Claude Enterprise administrator organizacji może dodać konektor dla wszystkich.
 
 Przepływ OAuth spełnia wymagania Claude: Dynamic Client Registration, PKCE S256, odpowiedź 401 z `resource_metadata`, adres zwrotny `https://claude.ai/api/mcp/auth_callback` i rotacja tokenów odświeżania. Działa też z Claude Code i MCP Inspector (adresy lokalne z dowolnym portem).
 
@@ -164,7 +170,9 @@ Aplikacja zapisuje dziennik jako JSON, a zdarzenia wymagające uwagi mają pole 
 |---|---|
 | `publish_failed` | publikacja się nie udała (także niejednoznacznie) |
 | `post_missed` | post przekroczył próg spóźnienia i nie został opublikowany |
-| `linkedin_login_expiring` | do wygaśnięcia logowania LinkedIn zostało 7 dni lub mniej (raz na godzinę) |
+| `linkedin_login_expiring` | do wygaśnięcia logowania LinkedIn którejś osoby zostało 7 dni lub mniej (raz na godzinę) |
+| `no_valid_login` | **żaden** administrator nie ma ważnego logowania - posty nie wyjdą |
+| `access_revoked` | osobie odebrano rolę na stronie - straciła dostęp do planera |
 | `scheduler_error` | błąd przebiegu harmonogramu |
 | `live_mode` | start w trybie live |
 
@@ -174,7 +182,7 @@ Przykładowe zapytanie do reguły alertu (Log Analytics, co 15 min, warunek: lic
 ContainerAppConsoleLogs_CL
 | where ContainerAppName_s == "linkedin-mcp"
 | extend j = parse_json(Log_s)
-| where tostring(j.alert) in ("publish_failed", "post_missed", "linkedin_login_expiring", "scheduler_error")
+| where tostring(j.alert) in ("publish_failed", "post_missed", "linkedin_login_expiring", "no_valid_login", "access_revoked", "scheduler_error")
 | project TimeGenerated, alert = tostring(j.alert), msg = tostring(j.msg), postId = tostring(j.postId)
 ```
 
@@ -183,10 +191,13 @@ ContainerAppConsoleLogs_CL
 Komendy działają z komputera, który ma dostęp do bazy (np. po dodaniu swojego adresu IP w zaporze PostgreSQL), z `DATABASE_URL` w `.env`:
 
 ```powershell
-npm run cli -- server status                 # właściciel, logowanie LinkedIn, pauza, kolejka
+npm run cli -- server status                 # strona, zespół, pauza, kolejka
 npm run cli -- server pause "powód"          # bezpiecznik: nic nie zostanie opublikowane
 npm run cli -- server resume
-npm run cli -- server owner-reset --yes      # odłącza właściciela i unieważnia tokeny konektora
+npm run cli -- server users list            # kto ma dostęp (role, status, ostatnie logowanie)
+npm run cli -- server users block "Jan Kowalski"     # natychmiastowe odcięcie dostępu
+npm run cli -- server users unblock "Jan Kowalski"
+npm run cli -- server users remove "Jan Kowalski" --yes   # usuwa konto i token tej osoby
 ```
 
 Dostęp do bazy z własnego komputera:

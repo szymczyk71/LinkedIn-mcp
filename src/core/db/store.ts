@@ -44,6 +44,9 @@ export type PostPatch = Partial<
     | 'publishedAtUtc'
     | 'lastError'
     | 'commentError'
+    | 'updatedBy'
+    | 'updatedByName'
+    | 'publishedBy'
   >
 >;
 

@@ -5,7 +5,7 @@ import type { Store } from './db/store.js';
 import { FileImageRepo, type ImageRepo } from './image.js';
 import { createLinkedInClient, createTokenStore, type LinkedInClient } from './linkedin/index.js';
 import { FilePause, type PauseBackend } from './pause.js';
-import type { TokenStore } from './token-store.js';
+import { SingleAccount, type Accounts } from './accounts.js';
 import type { UploadRegistry } from './uploads.js';
 import { systemClock, type Clock } from './util.js';
 
@@ -24,6 +24,7 @@ export * from './token-store.js';
 export * from './service.js';
 export * from './worker-token.js';
 export * from './uploads.js';
+export * from './accounts.js';
 export * from './db/store.js';
 export { SqliteStore } from './db/sqlite-store.js';
 export * from './linkedin/index.js';
@@ -39,13 +40,13 @@ export interface CoreContext {
   images: ImageRepo;
   /** Bezpiecznik (plik PAUSE lokalnie, wpis w bazie w server-http). */
   pause: PauseBackend;
-  /** Zaszyfrowany token LinkedIn. */
-  tokens: TokenStore;
+  /** Konta administratorów strony (zaszyfrowane tokeny LinkedIn): jedno lokalnie, wiele w server-http. */
+  accounts: Accounts;
   /** Przesyłanie zdjęć przez jednorazowy link (tylko server-http). */
   uploads?: UploadRegistry;
 }
 
-export type CoreOverrides = Partial<Pick<CoreContext, 'store' | 'linkedin' | 'clock' | 'images' | 'pause' | 'tokens'>> & {
+export type CoreOverrides = Partial<Pick<CoreContext, 'store' | 'linkedin' | 'clock' | 'images' | 'pause' | 'accounts'>> & {
   auditFile?: string | null;
 };
 
@@ -54,11 +55,11 @@ export function createCore(config: Config, overrides: CoreOverrides = {}): CoreC
   ensureDataDir(config.paths);
   const clock = overrides.clock ?? systemClock;
   const store = overrides.store ?? new SqliteStore(config.paths.dbFile);
-  const tokens = overrides.tokens ?? createTokenStore(config);
-  const linkedin = overrides.linkedin ?? createLinkedInClient(config, tokens);
+  const accounts = overrides.accounts ?? new SingleAccount(createTokenStore(config));
+  const linkedin = overrides.linkedin ?? createLinkedInClient(config, accounts);
   const auditFile = overrides.auditFile === undefined ? config.paths.auditLogFile : overrides.auditFile;
   const audit = new AuditLog(store, auditFile, clock);
   const images = overrides.images ?? new FileImageRepo(config.paths.imagesDir);
   const pause = overrides.pause ?? new FilePause(config.paths.pauseFlagFile);
-  return { config, store, audit, linkedin, clock, images, pause, tokens };
+  return { config, store, audit, linkedin, clock, images, pause, accounts };
 }

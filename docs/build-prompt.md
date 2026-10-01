@@ -1,5 +1,11 @@
 # Prompt budowy lokalnego serwera MCP LinkedIn
 
+> **Zapis pierwotnych wymagań.** Później ustalono zmiany (obowiązuje [kontrakt](mcp-tools-contract.md) i [przewodnik](user-guide.md)):
+> - posty publikowane są **w imieniu strony firmy KTBnet**, a nie z profilu osobistego (Community Management API);
+> - z planera korzysta kilku administratorów strony (role `ADMINISTRATOR` i `CONTENT_ADMINISTRATOR`) ze wspólną kolejką;
+> - docelowo serwer działa w Azure jako zdalny konektor MCP (wariant server-http, PostgreSQL), a harmonogram co 5 minut;
+> - zdjęcia w wersji serwerowej wysyła się przez jednorazowy link.
+
 Zbuduj lokalny serwer MCP LinkedIn dla mojego komputera i Claude Desktop.
 Specyfikacja narzędzi jest w docs/mcp-tools-contract.md i jest nadrzędna
 co do nazw narzędzi, pól, walidacji i statusów. W sprawach transportu,

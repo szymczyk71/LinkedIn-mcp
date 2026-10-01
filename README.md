@@ -1,6 +1,6 @@
 # LinkedIn MCP (lokalny)
 
-Lokalny serwer MCP dla Claude Desktop. Publikuje zatwierdzone posty na profilu osobistym LinkedIn o zaplanowanej godzinie i dodaje pod nimi komentarz.
+Serwer MCP dla Claude: publikuje zatwierdzone posty **na stronie firmy (KTBnet)** o zaplanowanej godzinie i dodaje pod nimi komentarz. Korzysta z niego zespół administratorów strony, ze wspólną kolejką.
 Rozmowa, redakcja i zatwierdzanie odbywają się w Claude Desktop. Serwer wykonuje tylko to, co zostało zatwierdzone.
 
 - Specyfikacja narzędzi: [docs/mcp-tools-contract.md](docs/mcp-tools-contract.md)
@@ -169,9 +169,9 @@ Pauza to plik `%LOCALAPPDATA%\linkedin-mcp\PAUSE`. Podczas pauzy posty spóźnio
 ## Przejście z atrapy na prawdziwe LinkedIn
 
 1. **Developer Portal** ([linkedin.com/developers/apps](https://www.linkedin.com/developers/apps)):
-   - zakładka **Products**: dodaj „Sign In with LinkedIn using OpenID Connect” oraz „Share on LinkedIn” (`w_member_social`);
+   - aplikacja z produktem **Community Management API** (nowa aplikacja, bez innych produktów; wniosek do LinkedIn - szczegóły w [docs/user-guide.md](docs/user-guide.md), krok 1);
    - zakładka **Auth → Authorized redirect URLs**: dodaj dokładnie `http://127.0.0.1:47811/oauth/callback`.
-2. **`.env`** (w katalogu repozytorium): uzupełnij `LINKEDIN_CLIENT_ID` i `LINKEDIN_CLIENT_SECRET`. Opcjonalnie ustaw `LINKEDIN_POST_VISIBILITY=CONNECTIONS`, jeśli posty mają widzieć tylko kontakty pierwszego stopnia. Potem `npm run worker:restart`.
+2. **`.env`** (w katalogu repozytorium): uzupełnij `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` i `LINKEDIN_ORGANIZATION_ID` (numer strony z adresu `linkedin.com/company/<numer>/admin`). Potem `npm run worker:restart`. Zalogować się może tylko osoba z rolą Super admin albo Content admin na tej stronie.
 3. **Logowanie** działa także w trybie atrapy, więc możesz zalogować się przed przełączeniem. Otwórz `http://127.0.0.1:47811/oauth/start` (albo uruchom `npm run login`, które wypisze ten adres), zaloguj się na LinkedIn i kliknij **Allow**.
    - Strona pokaże konto, datę wygaśnięcia tokenu (60 dni) i uprawnienia.
    - Token jest szyfrowany kluczem z Menedżera poświadczeń Windows.
@@ -216,7 +216,7 @@ Docelowo aplikacja działa w Azure jako zdalny konektor MCP. Komputer nie musi b
 - Wdrożenie krok po kroku: [docs/azure-deployment.md](docs/azure-deployment.md).
 - Uruchomienie lokalne (PostgreSQL i aplikacja w Dockerze): `docker compose up --build`, adres `http://localhost:8080/mcp`. Sekrety podaj w pliku `.env.server`.
 - Uruchomienie bez Dockera: `npm run server-http` z ustawionymi `DATABASE_URL`, `PUBLIC_BASE_URL`, `LINKEDIN_MCP_ENC_KEY`, `LINKEDIN_CLIENT_ID` i `LINKEDIN_CLIENT_SECRET`.
-- Administracja: `npm run cli -- server status | pause | resume | owner-reset --yes` (wymaga `DATABASE_URL`).
+- Administracja: `npm run cli -- server status | pause | resume | users list|block|unblock|remove` (wymaga `DATABASE_URL`).
 
 ## Testy i MCP Inspector
 

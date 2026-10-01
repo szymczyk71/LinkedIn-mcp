@@ -354,7 +354,7 @@ describe('linkedin_auth_status', () => {
     const s = await svc.authStatus();
     expect(s).toMatchObject({
       connected: true,
-      profile_name: 'Szymon Warda (atrapa)',
+      profile_name: 'KTBnet (atrapa)',
       expires_at: '2026-12-31T00:00:00.000Z',
       days_left: 54,
       login_url: 'http://127.0.0.1:47811/oauth/start',

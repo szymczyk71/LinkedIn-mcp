@@ -10,8 +10,10 @@ Ten dokument opisuje, jak wygląda codzienna praca z planerem i co trzeba zrobi�
 
 Posty piszesz i planujesz w rozmowie z Claude Desktop. Claude pokazuje podgląd, a Ty go zatwierdzasz. Zatwierdzona seria trafia do **aplikacji w Azure**, która działa całą dobę:
 
-1. o zaplanowanej godzinie publikuje post na Twoim profilu LinkedIn;
-2. po kilku minutach dodaje pod nim Twój komentarz.
+1. o zaplanowanej godzinie publikuje post **na stronie firmy KTBnet** (jako KTBnet, nie z Twojego profilu);
+2. po kilku minutach dodaje pod nim komentarz, także jako KTBnet.
+
+Z planera korzysta **zespół administratorów strony KTBnet**. Każda osoba loguje się swoim kontem LinkedIn, a wszyscy widzą wspólną kolejkę.
 
 ```
 Claude Desktop ──konektor MCP (HTTPS)──> aplikacja w Azure ──o 8:00──> LinkedIn
@@ -31,7 +33,10 @@ Claude Desktop ──konektor MCP (HTTPS)──> aplikacja w Azure ──o 8:00�
 | **Gdzie widać zaplanowane posty** | W Claude („pokaż kolejkę”). **Nie** w zakładce „Zaplanowane posty” na LinkedIn, bo API LinkedIn nie pozwala tam dodawać postów. Planer trzyma kolejkę u siebie i publikuje w wyznaczonej chwili, tak jak Buffer czy Hootsuite. |
 | **Dokładność godziny** | Harmonogram sprawdza kolejkę co 5 minut (:00, :05, :10…). Termin 8:00 oznacza publikację o 8:00, a termin 8:02 publikację o 8:05, o czym podgląd uprzedza. |
 | **Zdjęcia** | Jedno zdjęcie na post (JPG, PNG albo GIF), wysyłane przez **jednorazowy link**, który podaje Claude (punkt 3). Samego obrazka wklejonego do czatu Claude nie może przekazać aplikacji. |
-| **Logowanie** | Jedno logowanie przez LinkedIn łączy konektor z Twoim kontem i daje aplikacji prawo publikowania. **Pierwsze konto, które się połączy, zostaje właścicielem**, a każde inne dostaje odmowę. Logowanie jest ważne 60 dni. |
+| **Kto może korzystać** | Osoby z rolą **Super admin** (`ADMINISTRATOR`) albo **Content admin** (`CONTENT_ADMINISTRATOR`) na stronie KTBnet. Planer sprawdza to w LinkedIn przy logowaniu, potem co godzinę i raz dziennie. Odebranie roli na LinkedIn odbiera też dostęp do planera. |
+| **Logowanie** | Każda osoba łączy konektor swoim kontem LinkedIn. Logowanie jest ważne 60 dni. |
+| **Wspólna kolejka** | Każdy widzi i może zmieniać wszystkie posty. Przy poście widać, kto go utworzył i kto ostatnio zmienił. |
+| **Gdy komuś wygaśnie logowanie** | Post i tak wyjdzie, tokenem innego administratora. Komentarz jako strona idzie tokenem osoby z rolą Super admin, bo Content admin nie może komentować w imieniu strony. Dlatego **co najmniej jedna osoba z rolą Super admin** powinna mieć ważne logowanie. |
 | **Skąd planować** | Z Claude Desktop. Ten sam konektor zadziała też na claude.ai i w aplikacji Claude na telefonie, jeśli kiedyś zechcesz. |
 
 ---
@@ -40,12 +45,13 @@ Claude Desktop ──konektor MCP (HTTPS)──> aplikacja w Azure ──o 8:00�
 
 ### Krok 1. Aplikacja w LinkedIn Developer Portal
 
-Na [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps), w aplikacji, której używasz:
+Publikowanie w imieniu strony firmy wymaga produktu **Community Management API**, który LinkedIn przyznaje po weryfikacji wniosku:
 
-1. zakładka **Products** musi mieć:
-   - **Sign In with LinkedIn using OpenID Connect**,
-   - **Share on LinkedIn**;
-2. zakładka **Auth → Authorized redirect URLs**: dodaj adres aplikacji w Azure, np.
+1. Utwórz **nową** aplikację na [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps), powiązaną ze stroną KTBnet (nazwa bez słów „LinkedIn”, „Linked”, „In”). **Nie dodawaj do niej innych produktów**, bo wniosek o Community Management API można złożyć tylko dla aplikacji bez innych produktów.
+2. **Settings → Verify → Generate URL**: link otwiera i zatwierdza super admin strony KTBnet.
+3. **Products → Community Management API → Request access**: podaj firmowy e-mail (`@ktbnet.pl`), dane firmy, politykę prywatności i zastosowanie **Page Management**. Poczekaj na decyzję LinkedIn.
+4. Po zatwierdzeniu sprawdź w zakładce **Auth**, jakie uprawnienia ma aplikacja. Potrzebne są `r_organization_admin` i `w_organization_social`; jeśli są też `r_basicprofile` i `w_organization_social_feed`, dopisz je w konfiguracji (`LINKEDIN_SCOPES`).
+5. Zakładka **Auth → Authorized redirect URLs**: dodaj adres aplikacji w Azure, np.
    `https://linkedin-mcp.<region>.azurecontainerapps.io/oauth/callback`
    Dokładny adres pojawi się po wdrożeniu w kroku 2.
 
@@ -60,7 +66,7 @@ Robi się to raz, według [azure-deployment.md](azure-deployment.md). Powstają:
 | **Key Vault** | Client Secret LinkedIn i klucz szyfrowania |
 | **Monitoring** (Azure Monitor) | dziennik i alerty e-mail o błędach publikacji oraz wygasającym logowaniu |
 
-Przy wdrożeniu ustawiasz Client ID i Client Secret z kroku 1, strefę czasową (domyślnie Europe/Warsaw) i tryb: najpierw `mock` (atrapa), potem `live`.
+Przy wdrożeniu ustawiasz Client ID i Client Secret z kroku 1, **numer strony KTBnet** (`LINKEDIN_ORGANIZATION_ID`, widoczny w adresie panelu administracyjnego strony: `linkedin.com/company/<numer>/admin`), strefę czasową (domyślnie Europe/Warsaw) i tryb: najpierw `mock` (atrapa), potem `live`.
 
 ✅ Sprawdzenie: adres `https://…/api/health` w przeglądarce odpowiada `"ok": true`.
 
@@ -68,10 +74,12 @@ Przy wdrożeniu ustawiasz Client ID i Client Secret z kroku 1, strefę czasową 
 
 1. **Settings → Connectors → Add custom connector**.
 2. Nazwa: np. `LinkedIn`. Adres: `https://linkedin-mcp.<region>.azurecontainerapps.io/mcp`.
-3. **Add**, potem **Connect**. Otworzy się logowanie LinkedIn: zaloguj się i kliknij **Allow**.
+3. **Add**, potem **Connect**. Otworzy się logowanie LinkedIn: zaloguj się **swoim** kontem i kliknij **Allow**.
 4. Wróć do Claude. Konektor ma status „połączony”.
 
-✅ Sprawdzenie: w nowej rozmowie **+ → Connectors** pokazuje konektor LinkedIn jako włączony. Na polecenie „Sprawdź status LinkedIn” Claude odpowiada z Twoim profilem i datą ważności logowania.
+Przy planie Claude Enterprise konektor może dodać administrator organizacji Claude raz dla wszystkich. Każda z osób klika wtedy tylko **Connect** i loguje się swoim LinkedIn.
+
+✅ Sprawdzenie: w nowej rozmowie **+ → Connectors** pokazuje konektor LinkedIn jako włączony. Na polecenie „Sprawdź status LinkedIn” Claude pokazuje stronę KTBnet, Twoje role, ważność Twojego logowania i listę osób z zespołu, które są połączone.
 
 Jeśli wcześniej był podłączony lokalny serwer `linkedin` (wersja testowa), usuń go z konfiguracji Claude Desktop, żeby nie mieć dwóch podobnych narzędzi.
 
@@ -143,10 +151,12 @@ Treść wychodzi dokładnie tak, jak w podglądzie, łącznie z nawiasami, gwiaz
 | **Publikacja się nie udała, błąd jednoznaczny** (np. odmowa LinkedIn) | status `failed`, opis w `last_error`, alert e-mail | Post na pewno nie powstał. Zaplanuj go ponownie. |
 | **Publikacja niepewna** (`ambiguous: true`, np. brak odpowiedzi LinkedIn po wysłaniu) | status `failed` z informacją „nie wiadomo, czy post powstał”, alert e-mail | **Sprawdź swój profil na LinkedIn.** Aplikacja celowo nie ponawia publikacji, żeby post nie ukazał się dwa razy. |
 | **Aplikacja w Azure nie działała w terminie** (np. awaria, restart) | spóźnienie poniżej 60 min: post wychodzi po wznowieniu; powyżej: status `missed` | Poproś Claude'a o nowy termin dla tego posta albo go anuluj. |
-| **Brak uprawnień do komentarzy** | komentarz `skipped`, `can_comment: no` | Posty dalej wychodzą, tylko bez komentarza. Komentarz dodasz ręcznie. |
+| **Brak uprawnień do komentarzy** | komentarz `skipped`, `can_comment: no` | Posty dalej wychodzą, tylko bez komentarza. Sprawdź, czy osoba z rolą Super admin ma ważne logowanie (status pokazuje zespół). Komentarz dodasz ręcznie. |
+| **Nikt z zespołu nie ma ważnego logowania** | ostrzeżenie w statusie, alert e-mail, posty dostają `failed` | Ktokolwiek z administratorów łączy konektor ponownie; nieopublikowane posty przeplanuj. |
+| **Ktoś odszedł z zespołu** | – | Odbierz mu rolę na stronie KTBnet; planer sam odetnie dostęp najpóźniej przy następnym sprawdzeniu. Od razu: `npm run cli -- server users block <osoba>`. |
 | **Link nie został podany na czas** | komentarz wychodzi w wersji bez linku albo jest pomijany | tak, jak ustaliłeś przy planowaniu |
 | **Chcesz natychmiast wstrzymać publikację** | – | Komenda administracyjna `npm run cli -- server pause "powód"` (z dostępem do bazy, patrz [azure-deployment.md](azure-deployment.md), punkt 9). Nic nie wyjdzie do `server resume`. Pojedynczy post anulujesz w Claude („anuluj post z czwartku”). |
-| **Logowanie LinkedIn wygasa (co 60 dni)** | Tydzień wcześniej status i alert e-mail „wygasa za N dni”. | W Claude Desktop: **Settings → Connectors → LinkedIn → Connect** (ponowne logowanie). Kolejka zostaje nietknięta. |
+| **Logowanie LinkedIn wygasa (co 60 dni, osobno dla każdej osoby)** | Tydzień wcześniej status i alert e-mail „wygasa za N dni”. | W Claude Desktop: **Settings → Connectors → LinkedIn → Connect** (ponowne logowanie). Kolejka zostaje nietknięta. |
 | **Link do zdjęcia wygasł** | strona „link wygasł” | Poproś Claude'a o nowy link. |
 
 ---
@@ -173,8 +183,8 @@ Claude widzi wklejony obraz, ale nie może przekazać pliku do konektora. Link o
 **Co jeśli po zatwierdzeniu zmienię albo usunę plik zdjęcia na dysku?**
 Nic się nie stanie. Aplikacja ma własną kopię i opublikuje dokładnie to zdjęcie, które zatwierdziłeś.
 
-**Czy ktoś inny może planować posty na moim profilu?**
-Nie. Konektor wymaga zalogowania, a aplikacja przyjmuje tylko konto LinkedIn właściciela, czyli pierwsze, które się połączyło. Połącz się więc od razu po wdrożeniu. Token LinkedIn jest zaszyfrowany, a klucz leży w Key Vault. Tokenu nie zwraca żadne narzędzie. Gdyby trzeba było zmienić właściciela: `npm run cli -- server owner-reset --yes`.
+**Kto może planować posty na stronie KTBnet?**
+Tylko administratorzy strony KTBnet z rolą Super admin albo Content admin. LinkedIn potwierdza rolę przy logowaniu, a planer sprawdza ją ponownie co godzinę i raz dziennie. Komuś, komu odbierzecie rolę na stronie, planer sam odetnie dostęp. Konto można też zablokować od razu komendą `npm run cli -- server users block <osoba>`. Tokeny LinkedIn są zaszyfrowane, a klucz leży w Key Vault. Tokenu nie zwraca żadne narzędzie.
 
 **Ile postów mogę zaplanować?**
 LinkedIn pozwala na 150 wywołań API dziennie na konto. Jeden post to kilka wywołań (post, zdjęcie, komentarz), więc przy normalnym użyciu limit nie ma znaczenia.

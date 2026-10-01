@@ -25,21 +25,27 @@ export interface PublishInput {
   image?: PublishImage;
   /** Stały klucz posta w naszej bazie. Atrapa używa go do wykrywania duplikatów. */
   idempotencyKey: string;
+  /** Preferowany administrator, którego tokenem wysłać (autor posta); gdy jego logowanie wygasło - inny aktywny. */
+  actAs?: string | null;
 }
 
 export interface PublishResult {
   postUrn: string;
   postUrl: string;
+  /** Administrator, którego tokenem post został wysłany. */
+  publishedBy?: string | null;
 }
 
 export interface CommentInput {
   postUrn: string;
   text: string;
   idempotencyKey: string;
+  actAs?: string | null;
 }
 
 export interface CommentResult {
   commentUrn: string;
+  publishedBy?: string | null;
 }
 
 export interface LinkedInClient {

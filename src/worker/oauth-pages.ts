@@ -1,6 +1,17 @@
 import type http from 'node:http';
 import type { CoreContext, Logger } from '../core/index.js';
-import { OAuthError, authorizationUrl, exchangeCode, fetchUserInfo, newState, requireClient, saveLogin } from '../core/linkedin/oauth.js';
+import {
+  AccessDenied,
+  OAuthError,
+  authorizationUrl,
+  buildTokenRecord,
+  exchangeCode,
+  fetchMemberIdentity,
+  newState,
+  requireClient,
+  resolveAccess,
+  saveLogin,
+} from '../core/linkedin/oauth.js';
 import { formatLocal } from '../core/time.js';
 
 /**
@@ -65,36 +76,39 @@ export class OAuthPages {
     try {
       const tok = await exchangeCode(this.ctx.config, code, this.fetchImpl);
       const scopes = (tok.scope ?? this.ctx.config.linkedin.scopes.join(' ')).split(/[\s,]+/).filter(Boolean);
-      const user = await fetchUserInfo(this.ctx.config, tok.access_token, this.fetchImpl);
-      const saved = await saveLogin(
-        this.ctx.tokens,
-        this.ctx.store,
+      const identity = await fetchMemberIdentity(this.ctx.config, tok.access_token, this.fetchImpl);
+      const access = resolveAccess(this.ctx.config, identity);
+      const rec = buildTokenRecord(
         { accessToken: tok.access_token, expiresInSec: tok.expires_in, refreshToken: tok.refresh_token, refreshExpiresInSec: tok.refresh_token_expires_in, scopes },
-        user,
+        identity,
+        access,
         'oauth',
       );
-      await this.ctx.audit.record('oauth', 'oauth_login', 'ok', saved.personUrn, { expiresAt: saved.expiresAt, scopes: saved.scopes });
-      this.log.info('Zalogowano do LinkedIn', { profile: saved.profileName, expiresAt: saved.expiresAt, scopes: saved.scopes });
-      const missing = ['w_member_social'].filter((s) => !saved.scopes.includes(s));
+      const saved = await saveLogin(this.ctx.accounts, this.ctx.store, rec);
+      await this.ctx.audit.record('oauth', 'oauth_login', 'ok', saved.personUrn, { expiresAt: saved.expiresAt, scopes: saved.scopes, roles: saved.roles });
+      this.log.info('Zalogowano do LinkedIn', { profile: saved.profileName, roles: saved.roles, expiresAt: saved.expiresAt, scopes: saved.scopes });
+      const missing = ['w_organization_social'].filter((s) => !saved.scopes.includes(s));
       const modeNote =
         this.ctx.config.mode === 'mock'
           ? '<p><b>Worker działa w trybie atrapy</b> - nic jeszcze nie trafi na LinkedIn. Przełączenie: <code>LINKEDIN_MODE=live</code> w .env i <code>npm run worker:restart</code>.</p>'
-          : '<p><b>Tryb live:</b> zatwierdzone posty będą publikowane na Twoim profilu.</p>';
+          : '<p><b>Tryb live:</b> zatwierdzone posty będą publikowane na stronie firmy.</p>';
       return page(
         res,
         200,
         'Połączono z LinkedIn',
-        `<p>Konto: <b>${esc(saved.profileName ?? saved.personUrn)}</b></p>
+        `<p>Konto: <b>${esc(saved.profileName ?? saved.personUrn)}</b> (role na stronie firmy: ${esc(saved.roles.join(', '))})</p>
+         <p>Posty będą publikowane jako strona: <code>${esc(saved.organizationUrn)}</code></p>
          <p>Token ważny do: <b>${esc(formatLocal(saved.expiresAt, this.ctx.config.defaultTimezone))}</b></p>
          <p>Uprawnienia: <code>${esc(saved.scopes.join(' '))}</code></p>
-         ${missing.length ? `<p style="color:#b00">Brak uprawnienia: ${esc(missing.join(', '))} - publikacja nie zadziała. Dodaj produkt „Share on LinkedIn” w Developer Portal.</p>` : ''}
+         ${missing.length ? `<p style="color:#b00">Brak uprawnienia: ${esc(missing.join(', '))} - publikacja jako strona nie zadziała. Aplikacja potrzebuje produktu Community Management API.</p>` : ''}
          ${modeNote}
          <p>Możesz zamknąć tę kartę.</p>`,
       );
     } catch (e) {
       const msg = e instanceof OAuthError ? e.message : 'Nieoczekiwany błąd logowania (szczegóły w worker.log).';
       if (!(e instanceof OAuthError)) this.log.error('Błąd OAuth', { error: e instanceof Error ? e.message : String(e) });
-      await this.ctx.audit.record('oauth', 'oauth_login', 'error', null, { error: msg });
+      await this.ctx.audit.record('oauth', 'oauth_login', e instanceof AccessDenied ? 'rejected' : 'error', null, { error: msg });
+      if (e instanceof AccessDenied) return page(res, 403, 'Brak dostępu', `<p>${esc(msg)}</p>`);
       return page(res, 502, 'Logowanie nieudane', `<p>${esc(msg)}</p><p><a href="/oauth/start">Spróbuj ponownie</a></p>`);
     }
   }

@@ -108,10 +108,19 @@ interface CheckedPost {
   warnings: string[];
 }
 
+/** Zalogowana osoba (administrator strony), w imieniu której działa serwis. */
+export interface ServiceUser {
+  personUrn: string;
+  name: string | null;
+}
+
+const daysUntil = (iso: string | null, now: Date) => (iso ? Math.floor((Date.parse(iso) - now.getTime()) / 86_400_000) : null);
+
 export class LinkedInService {
   constructor(
     private readonly ctx: CoreContext,
     private readonly actor: Actor = 'mcp',
+    private readonly user: ServiceUser | null = null,
   ) {}
 
   private get cfg() {
@@ -124,13 +133,21 @@ export class LinkedInService {
     return this.now().toISOString();
   }
 
+  /** Kto wykonuje operację: zalogowana osoba (server-http) albo jedyne konto (wersja lokalna). */
+  private async who(): Promise<ServiceUser | null> {
+    if (this.user) return this.user;
+    const [a] = await this.ctx.accounts.list();
+    return a ? { personUrn: a.personUrn, name: a.name } : null;
+  }
+
   // ----- linkedin_auth_status -----
   async authStatus() {
     const { linkedin, store, config } = this.ctx;
+    const now = this.now();
     const info = await linkedin.checkAuth();
     const meta = await store.getAuthMeta(linkedin.mode);
-    if (info.connected) {
-      await store.setAuthMeta(linkedin.mode, {
+    if (info.connected && linkedin.mode === 'mock') {
+      await store.setAuthMeta('mock', {
         personUrn: info.personUrn,
         profileName: info.profileName,
         profileUrl: info.profileUrl,
@@ -140,50 +157,70 @@ export class LinkedInService {
         updatedAt: this.nowIso(),
       });
     }
-    const daysLeft = info.expiresAt ? Math.floor((new Date(info.expiresAt).getTime() - this.now().getTime()) / 86_400_000) : null;
+    const orgId = config.linkedin.organizationId;
+    const orgName = config.linkedin.organizationName ?? (orgId ? `strona firmy ${orgId}` : null);
+
+    // Zespół: administratorzy strony, którzy połączyli planer (bez tokenów).
+    const team = (await this.ctx.accounts.list()).map((a) => ({
+      name: a.name ?? a.personUrn,
+      roles: a.roles,
+      status: a.status,
+      connected: a.status === 'active' && a.tokenPresent && Boolean(a.expiresAt && a.expiresAt > now.toISOString()),
+      expires_at: a.expiresAt,
+      days_left: daysUntil(a.expiresAt, now),
+      last_login_at: a.lastLoginAt,
+      person_urn: a.personUrn,
+    }));
+    const me = await this.who();
+    const mine = me ? team.find((t) => t.person_urn === me.personUrn) ?? null : null;
+    const anyConnected = team.some((t) => t.connected);
+    const liveMeta = await store.getAuthMeta('live');
+
     const warnings: string[] = [];
-    if (!info.connected) warnings.push('Brak połączenia z LinkedIn. Zaloguj się na stronie login_url.');
-    if (daysLeft !== null && daysLeft <= 7) warnings.push(`Logowanie do LinkedIn wygasa za ${daysLeft} dni. Zaloguj się ponownie (login_url).`);
-    if (info.connected && !info.canPost) warnings.push('Brak uprawnienia do publikacji (w_member_social).');
     const pause = await this.ctx.pause.read();
     if (pause.paused) warnings.push('Bezpiecznik PAUSE jest włączony: harmonogram niczego nie publikuje.');
     const failedRecently = (await store.listPosts({ status: 'failed', limit: 20 })).length;
     if (failedRecently) warnings.push(`W kolejce są posty z błędem publikacji (${failedRecently}). Sprawdź linkedin_list_queue ze statusem failed.`);
-
-    // Stan prawdziwego logowania (także w trybie atrapy - żeby przed przełączeniem było widać, czy jest token).
-    const tok = await this.ctx.tokens.info();
-    const liveMeta = await store.getAuthMeta('live');
-    const liveLogin = {
-      present: tok.present,
-      profile_name: tok.profileName,
-      expires_at: tok.expiresAt,
-      days_left: tok.expiresAt ? Math.floor((new Date(tok.expiresAt).getTime() - this.now().getTime()) / 86_400_000) : null,
-      scopes: tok.scopes,
-      can_comment: liveMeta?.canComment ?? 'unknown',
-    };
     if (config.mode === 'mock') {
-      warnings.push(
-        tok.present
-          ? `Tryb atrapy: nic nie trafia na LinkedIn. Prawdziwe logowanie jest gotowe (${tok.profileName ?? 'profil'}) - przełączenie: LINKEDIN_MODE=live w .env i npm run worker:restart.`
-          : 'Tryb atrapy: nic nie trafia na LinkedIn.',
-      );
+      const mockDays = daysUntil(info.expiresAt, now);
+      if (!info.connected) warnings.push('Brak połączenia z LinkedIn (atrapa). Zaloguj się na stronie login_url.');
+      if (mockDays !== null && mockDays <= 7) warnings.push(`Logowanie do LinkedIn wygasa za ${mockDays} dni.`);
+      warnings.push(anyConnected ? 'Tryb atrapy: nic nie trafia na LinkedIn. Prawdziwe logowanie jest gotowe.' : 'Tryb atrapy: nic nie trafia na LinkedIn.');
+    } else {
+      if (!anyConnected) warnings.push('Żaden administrator strony nie ma ważnego logowania - posty nie zostaną opublikowane. Połącz ponownie konektor.');
+      if (!team.some((t) => t.connected && t.roles.includes('ADMINISTRATOR'))) {
+        warnings.push('Nikt z rolą ADMINISTRATOR nie ma ważnego logowania - komentarze jako strona mogą się nie udać (CONTENT_ADMINISTRATOR nie komentuje w imieniu strony).');
+      }
     }
+    if (mine?.days_left !== null && mine?.days_left !== undefined && mine.days_left <= 7) {
+      warnings.push(`Twoje logowanie do LinkedIn wygasa za ${mine.days_left} dni. Połącz ponownie konektor.`);
+    }
+    for (const t of team) {
+      if (t !== mine && t.connected && t.days_left !== null && t.days_left <= 7) warnings.push(`Logowanie osoby ${t.name} wygasa za ${t.days_left} dni.`);
+    }
+
+    const live = config.mode === 'live';
     const result = {
-      connected: info.connected,
-      profile_name: info.profileName,
-      profile_url: info.profileUrl,
-      expires_at: info.expiresAt,
-      days_left: daysLeft,
-      login_url: `http://${config.workerHost}:${config.workerPort}/oauth/start`,
-      can_post: info.connected && info.canPost,
-      can_comment: meta?.canComment ?? 'unknown',
+      connected: live ? anyConnected : info.connected,
+      profile_name: live ? orgName : info.profileName,
+      profile_url: live ? (orgId ? `https://www.linkedin.com/company/${orgId}/` : null) : info.profileUrl,
+      organization_urn: orgId ? `urn:li:organization:${orgId}` : null,
+      expires_at: live ? (mine?.expires_at ?? null) : info.expiresAt,
+      days_left: live ? (mine?.days_left ?? null) : daysUntil(info.expiresAt, now),
+      login_url: config.http.publicBaseUrl
+        ? 'W Claude: Settings → Connectors → konektor LinkedIn → Connect (ponowne połączenie)'
+        : `http://${config.workerHost}:${config.workerPort}/oauth/start`,
+      can_post: live ? anyConnected : info.connected && info.canPost,
+      can_comment: (live ? liveMeta?.canComment : meta?.canComment) ?? 'unknown',
       mode: config.mode,
       paused: pause.paused,
-      post_visibility: config.linkedin.visibility,
-      live_login: liveLogin,
+      you: me ? { name: me.name ?? mine?.name ?? null, roles: mine?.roles ?? [], expires_at: mine?.expires_at ?? null, days_left: mine?.days_left ?? null } : null,
+      team: team.map(({ person_urn: _p, ...t }) => t),
+      live_login: { present: anyConnected, can_comment: liveMeta?.canComment ?? 'unknown' },
+      allowed_roles: config.linkedin.allowedRoles,
       warnings,
     };
-    await this.ctx.audit.record(this.actor, 'linkedin_auth_status', 'ok', null, { connected: result.connected });
+    await this.ctx.audit.record(this.actor, 'linkedin_auth_status', 'ok', me?.personUrn ?? null, { connected: result.connected });
     return result;
   }
 
@@ -329,8 +366,9 @@ export class LinkedInService {
         throw new ToolError('plan_no_longer_valid', 'Plan nie spełnia już warunków. Wygeneruj nowy podgląd.', { problems });
       }
     }
+    const author = await this.who();
     try {
-      const { series, posts } = await store.commitPlan(plan_id, nowIso, (pl, sid) => pl.posts.map((p) => newPostFromPlanned(p, sid, this.ctx.linkedin.mode)), newId('ser'));
+      const { series, posts } = await store.commitPlan(plan_id, nowIso, (pl, sid) => pl.posts.map((p) => newPostFromPlanned(p, sid, this.ctx.linkedin.mode, author)), newId('ser'));
       await audit.record(this.actor, 'linkedin_commit_series', 'ok', series.id, { planId: plan_id, posts: posts.map((p) => p.id) });
       return {
         series_id: series.id,
@@ -463,6 +501,9 @@ export class LinkedInService {
 
     if (chk.errors.length) throw await reject('validation_failed', 'Zmiana nie przeszła walidacji.', { errors: chk.errors, warnings: chk.warnings });
     if (post.status === 'missed') patch.status = 'scheduled';
+    const editor = await this.who();
+    patch.updatedBy = editor?.personUrn ?? null;
+    patch.updatedByName = editor?.name ?? null;
 
     const updated = await store.transitionPost(post.id, EDITABLE_STATUSES, patch, nowIso, post.version);
     if (!updated) throw await reject('conflict', 'Post zmienił się w międzyczasie (np. zaczęła się publikacja). Sprawdź go i spróbuj ponownie.');
@@ -503,7 +544,14 @@ export class LinkedInService {
     }
     const nowIso = this.nowIso();
     const commentStatus = post.commentStatus === 'none' || post.commentStatus === 'done' ? post.commentStatus : 'skipped';
-    const updated = await store.transitionPost(id, CANCELABLE_STATUSES, { status: 'canceled', commentStatus }, nowIso, post.version);
+    const by = await this.who();
+    const updated = await store.transitionPost(
+      id,
+      CANCELABLE_STATUSES,
+      { status: 'canceled', commentStatus, updatedBy: by?.personUrn ?? null, updatedByName: by?.name ?? null },
+      nowIso,
+      post.version,
+    );
     if (!updated) throw new ToolError('conflict', 'Post zmienił się w międzyczasie (np. zaczęła się publikacja). Sprawdź jego status.');
     await store.addEvent(id, 'canceled', { fromStatus: post.status }, nowIso);
     await audit.record(this.actor, 'linkedin_cancel_post', 'ok', id, { fromStatus: post.status });
@@ -537,7 +585,14 @@ export class LinkedInService {
       throw await reject('comment_not_pending', `Komentarz ma status "${post.commentStatus}" - nie da się już podmienić linku.`);
     }
     const nowIso = this.nowIso();
-    const updated = await store.transitionPost(id, [post.status], { commentUrl: clean, commentStatus: 'waiting' }, nowIso, post.version);
+    const by = await this.who();
+    const updated = await store.transitionPost(
+      id,
+      [post.status],
+      { commentUrl: clean, commentStatus: 'waiting', updatedBy: by?.personUrn ?? null, updatedByName: by?.name ?? null },
+      nowIso,
+      post.version,
+    );
     if (!updated) throw await reject('conflict', 'Post zmienił się w międzyczasie. Spróbuj ponownie.');
     await store.addEvent(id, 'comment_link_set', { host: parsed.hostname }, nowIso);
     await audit.record(this.actor, 'linkedin_set_comment_link', 'ok', id, { host: parsed.hostname });
@@ -727,6 +782,9 @@ export function presentPost(p: Post) {
     published_at_local: p.publishedAtUtc ? formatLocal(p.publishedAtUtc, p.timezone) : null,
     last_error: p.lastError,
     comment_error: p.commentError,
+    created_by: p.createdByName ?? p.createdBy,
+    updated_by: p.updatedByName ?? p.updatedBy,
+    published_by: p.publishedBy,
   };
 }
 

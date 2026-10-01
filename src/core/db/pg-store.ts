@@ -7,6 +7,7 @@ import type {
   OAuthCode,
   OAuthRequest,
   OAuthToken,
+  OrgUser,
   ServerData,
   StoredImage,
   UploadTicketRow,
@@ -161,6 +162,25 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_oauth_tokens_family ON oauth_tokens(family_id);
   `,
+  // 2: wspólna kolejka zespołu (autorstwo postów) i administratorzy strony firmy
+  `
+  ALTER TABLE posts ADD COLUMN created_by TEXT;
+  ALTER TABLE posts ADD COLUMN created_by_name TEXT;
+  ALTER TABLE posts ADD COLUMN updated_by TEXT;
+  ALTER TABLE posts ADD COLUMN updated_by_name TEXT;
+  ALTER TABLE posts ADD COLUMN published_by TEXT;
+  CREATE TABLE org_users (
+    person_urn TEXT PRIMARY KEY,
+    name TEXT,
+    roles_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active','revoked','blocked')),
+    first_login_at TEXT NOT NULL,
+    last_login_at TEXT NOT NULL,
+    last_verified_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_oauth_tokens_person ON oauth_tokens(person_urn);
+  DELETE FROM settings WHERE name = 'owner_person_urn';
+  `,
 ];
 
 const MIGRATION_LOCK = 471_811;
@@ -253,14 +273,14 @@ export class PostgresStore implements Store, ServerData {
           `INSERT INTO posts (id, series_id, seq, text, text_hash, publish_at_utc, timezone, status, comment_text, link_mode,
              comment_text_no_link, if_no_link, comment_delay_min, image_json, mode, comment_url, comment_status, comment_due_utc,
              comment_claimed_at, idempotency_key, linkedin_post_urn, post_url, linkedin_comment_urn, published_at_utc,
-             last_error_json, comment_error_json, version, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,1,$27,$27)`,
+             last_error_json, comment_error_json, version, created_at, updated_at, created_by, created_by_name)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,1,$27,$27,$28,$29)`,
           [
             p.id, p.seriesId, p.seq, p.text, p.textHash, p.publishAtUtc, p.timezone, p.status, p.commentText, p.linkMode,
             p.commentTextNoLink, p.ifNoLink, p.commentDelayMin, p.image ? JSON.stringify(p.image) : null, p.mode, p.commentUrl,
             p.commentStatus, p.commentDueUtc, p.commentClaimedAt, p.idempotencyKey, p.linkedinPostUrn, p.postUrl,
             p.linkedinCommentUrn, p.publishedAtUtc, p.lastError ? JSON.stringify(p.lastError) : null,
-            p.commentError ? JSON.stringify(p.commentError) : null, nowUtc,
+            p.commentError ? JSON.stringify(p.commentError) : null, nowUtc, p.createdBy, p.createdByName,
           ],
         );
         await c.query('INSERT INTO post_events (post_id, at, type, detail_json) VALUES ($1,$2,$3,$4)', [
@@ -606,6 +626,48 @@ export class PostgresStore implements Store, ServerData {
     return r.rowCount ?? 0;
   }
 
+  async revokeTokensForPerson(personUrn: string, nowUtc: string): Promise<number> {
+    const r = await this.pool.query('UPDATE oauth_tokens SET revoked_at = $2 WHERE person_urn = $1 AND revoked_at IS NULL', [personUrn, nowUtc]);
+    return r.rowCount ?? 0;
+  }
+
+  // ---------- użytkownicy ----------
+
+  async upsertUserLogin(u: { personUrn: string; name: string | null; roles: string[] }, nowUtc: string): Promise<OrgUser> {
+    const [r] = await this.q(
+      `INSERT INTO org_users (person_urn, name, roles_json, status, first_login_at, last_login_at, last_verified_at)
+       VALUES ($1,$2,$3,'active',$4,$4,$4)
+       ON CONFLICT (person_urn) DO UPDATE SET name = COALESCE(EXCLUDED.name, org_users.name), roles_json = EXCLUDED.roles_json,
+         status = CASE WHEN org_users.status = 'blocked' THEN 'blocked' ELSE 'active' END,
+         last_login_at = EXCLUDED.last_login_at, last_verified_at = EXCLUDED.last_verified_at
+       RETURNING *`,
+      [u.personUrn, u.name, JSON.stringify(u.roles), nowUtc],
+    );
+    return rowToUser(r!);
+  }
+
+  async getUser(personUrn: string): Promise<OrgUser | null> {
+    const [r] = await this.q('SELECT * FROM org_users WHERE person_urn = $1', [personUrn]);
+    return r ? rowToUser(r) : null;
+  }
+
+  async listUsers(): Promise<OrgUser[]> {
+    return (await this.q('SELECT * FROM org_users ORDER BY first_login_at')).map(rowToUser);
+  }
+
+  async setUserStatus(personUrn: string, status: OrgUser['status'], roles: string[] | null, nowUtc: string): Promise<boolean> {
+    const r = await this.pool.query(
+      'UPDATE org_users SET status = $2, roles_json = COALESCE($3, roles_json), last_verified_at = $4 WHERE person_urn = $1',
+      [personUrn, status, roles ? JSON.stringify(roles) : null, nowUtc],
+    );
+    return r.rowCount === 1;
+  }
+
+  async deleteUser(personUrn: string): Promise<boolean> {
+    const r = await this.pool.query('DELETE FROM org_users WHERE person_urn = $1', [personUrn]);
+    return (r.rowCount ?? 0) > 0;
+  }
+
   async revokeAllTokens(nowUtc: string): Promise<number> {
     const r = await this.pool.query('UPDATE oauth_tokens SET revoked_at = $1 WHERE revoked_at IS NULL', [nowUtc]);
     return r.rowCount ?? 0;
@@ -627,6 +689,18 @@ export class PostgresStore implements Store, ServerData {
   async close(): Promise<void> {
     await this.pool.end();
   }
+}
+
+function rowToUser(r: Row): OrgUser {
+  return {
+    personUrn: r.person_urn as string,
+    name: (r.name as string | null) ?? null,
+    roles: JSON.parse(r.roles_json as string),
+    status: r.status as OrgUser['status'],
+    firstLoginAt: r.first_login_at as string,
+    lastLoginAt: r.last_login_at as string,
+    lastVerifiedAt: r.last_verified_at as string,
+  };
 }
 
 function rowToUpload(r: Row): UploadTicketRow {

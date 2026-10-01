@@ -77,6 +77,13 @@ export interface Post {
   image: PostImage | null;
   /** Tryb, w którym post zatwierdzono. Worker publikuje tylko posty ze swojego trybu. */
   mode: 'mock' | 'live';
+  /** Kto zatwierdził post i kto ostatnio go zmienił (urn:li:person:... i imię, jeśli znane). */
+  createdBy: string | null;
+  createdByName: string | null;
+  updatedBy: string | null;
+  updatedByName: string | null;
+  /** Administrator, którego tokenem post wysłano na LinkedIn. */
+  publishedBy: string | null;
   commentUrl: string | null;
   commentStatus: CommentStatus;
   commentDueUtc: string | null;

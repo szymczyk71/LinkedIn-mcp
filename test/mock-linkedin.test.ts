@@ -31,7 +31,7 @@ describe('atrapa LinkedIn', () => {
   it('checkAuth: połączony, rozłączony, bez uprawnień do publikacji', async () => {
     const m = new MockLinkedIn();
     expect((await m.checkAuth()).connected).toBe(true);
-    expect((await m.checkAuth()).personUrn).toMatch(/^urn:li:person:/);
+    expect((await m.checkAuth()).personUrn).toMatch(/^urn:li:organization:/); // atrapa "publikuje" jako strona firmy
     m.setScenario({ auth: 'disconnected' });
     expect((await m.checkAuth()).connected).toBe(false);
     m.setScenario({ auth: 'no_post_permission' });

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type http from 'node:http';
 import type { OAuthToken } from '../core/db/server-data.js';
 import { sha256Hex } from '../core/image.js';
-import { OAuthError, exchangeCode, fetchUserInfo, saveLogin } from '../core/linkedin/oauth.js';
+import { AccessDenied, OAuthError, buildTokenRecord, exchangeCode, fetchMemberIdentity, resolveAccess, saveLogin } from '../core/linkedin/oauth.js';
 import type { Logger } from '../core/logger.js';
 import { formatLocal } from '../core/time.js';
 import { BodyTooLarge, esc, json, page, readBody } from '../web/html.js';
@@ -14,8 +14,9 @@ import type { ServerCore } from './core.js';
  * - /.well-known/oauth-protected-resource  (resource = <base>/mcp, authorization_servers = [<base>])
  * - /.well-known/oauth-authorization-server (DCR, PKCE S256, klient publiczny: token_endpoint_auth_method "none")
  * - POST /register (DCR, JSON), GET /authorize (+ ekran z adresem zwrotnym), POST /token (form-urlencoded)
- * Tożsamość użytkownika potwierdza logowanie LinkedIn; to samo logowanie zapisuje token LinkedIn do publikacji.
- * Dostęp ma tylko właściciel: pierwsze konto LinkedIn, które się połączy (zapisane w ustawieniach "owner_person_urn").
+ * Tożsamość i uprawnienia potwierdza logowanie LinkedIn: dostęp mają osoby z dozwoloną rolą (domyślnie ADMINISTRATOR,
+ * CONTENT_ADMINISTRATOR) na stronie firmy z konfiguracji (organizationAcls). To samo logowanie zapisuje token tej osoby,
+ * którym planer publikuje w imieniu strony. Role są sprawdzane ponownie przy odświeżaniu tokenu i raz dziennie.
  */
 
 export const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
@@ -227,31 +228,33 @@ export class OAuthServer {
     }
     try {
       const tok = await exchangeCode(this.core.config, q.get('code') ?? '', this.fetchImpl);
-      const user = await fetchUserInfo(this.core.config, tok.access_token, this.fetchImpl);
-      const personUrn = `urn:li:person:${user.sub}`;
-
-      const owner = await this.core.db.getSetting('owner_person_urn');
-      if (owner && owner !== personUrn) {
-        await this.core.audit.record('oauth', 'oauth_login', 'rejected', personUrn, { reason: 'not_owner' });
-        this.log.warn('Odmowa: logowanie kontem innym niż właściciel', { personUrn });
-        return page(res, 403, 'Brak dostępu', '<p>To konto LinkedIn nie jest właścicielem tego planera. Dostęp ma tylko konto, które połączyło się jako pierwsze.</p>');
+      const identity = await fetchMemberIdentity(this.core.config, tok.access_token, this.fetchImpl);
+      const personUrn = identity.personUrn;
+      let access: { organizationUrn: string; roles: string[] };
+      try {
+        access = resolveAccess(this.core.config, identity);
+      } catch (e) {
+        if (!(e instanceof AccessDenied)) throw e;
+        await this.core.audit.record('oauth', 'oauth_login', 'rejected', personUrn, { reason: 'no_page_role', roles: identity.acls });
+        this.log.warn('Odmowa: brak dozwolonej roli na stronie firmy', { personUrn });
+        return page(res, 403, 'Brak dostępu', `<p>${esc(e.message)}</p><p class="muted">Dostęp mają osoby z rolą ${esc(this.core.config.linkedin.allowedRoles.join(' albo '))} na stronie firmy.</p>`);
       }
-      if (!owner) {
-        await this.core.db.setSetting('owner_person_urn', personUrn, this.nowIso());
-        await this.core.audit.record('oauth', 'owner_claimed', 'ok', personUrn, { profileName: user.name });
-        this.log.info('Ustalono właściciela planera', { personUrn, profileName: user.name });
+      const existing = await this.core.db.getUser(personUrn);
+      if (existing?.status === 'blocked') {
+        await this.core.audit.record('oauth', 'oauth_login', 'rejected', personUrn, { reason: 'blocked' });
+        return page(res, 403, 'Brak dostępu', '<p>To konto zostało zablokowane przez administratora planera.</p>');
       }
-      const scopes = (tok.scope ?? this.core.config.linkedin.scopes.join(' ')).split(/[\s,]+/).filter(Boolean);
-      const saved = await saveLogin(
-        this.core.tokens,
-        this.core.store,
+      const scopes = (tok.scope ?? this.core.config.linkedin.scopes.join(' ')).split(/[s,]+/).filter(Boolean);
+      const rec = buildTokenRecord(
         { accessToken: tok.access_token, expiresInSec: tok.expires_in, refreshToken: tok.refresh_token, refreshExpiresInSec: tok.refresh_token_expires_in, scopes },
-        user,
+        identity,
+        access,
         'oauth',
         this.core.clock.now(),
       );
-      await this.core.audit.record('oauth', 'oauth_login', 'ok', personUrn, { expiresAt: saved.expiresAt, scopes, client: areq.clientId });
-      this.log.info('Zalogowano do LinkedIn przez konektor', { profile: saved.profileName, expiresAt: formatLocal(saved.expiresAt, this.core.config.defaultTimezone) });
+      const saved = await saveLogin(this.core.accounts, this.core.store, rec, this.core.clock.now());
+      await this.core.audit.record('oauth', 'oauth_login', 'ok', personUrn, { expiresAt: saved.expiresAt, scopes, roles: saved.roles, client: areq.clientId, newUser: !existing });
+      this.log.info('Zalogowano do LinkedIn przez konektor', { personUrn, profile: saved.profileName, roles: saved.roles, expiresAt: formatLocal(saved.expiresAt, this.core.config.defaultTimezone) });
 
       const code = rnd(32);
       await this.core.db.createCode({
@@ -310,8 +313,11 @@ export class OAuthServer {
         return err(400, 'invalid_grant', 'Token odświeżania nieważny.');
       }
       if (t.clientId !== clientId) return err(400, 'invalid_grant', 'Token odświeżania należy do innego klienta.');
-      const owner = await this.core.db.getSetting('owner_person_urn');
-      if (owner !== t.personUrn) return err(400, 'invalid_grant', 'Zmienił się właściciel planera.');
+      const denied = await this.reverify(t.personUrn);
+      if (denied) {
+        await this.core.db.revokeFamily(t.familyId, now);
+        return err(400, 'invalid_grant', denied);
+      }
       return this.issue(res, clientId, t.personUrn, t.scope, t.familyId);
     }
     return err(400, 'unsupported_grant_type', 'Obsługiwane: authorization_code, refresh_token.');
@@ -326,8 +332,8 @@ export class OAuthServer {
     const ttl = this.core.config.http.accessTokenTtlMin;
     const access = rnd(32);
     const refresh = rnd(32);
-    const li = await this.core.tokens.info();
-    const liExpiry = li.expiresAt ? Date.parse(li.expiresAt) : now.getTime();
+    const li = await this.core.accounts.info(personUrn);
+    const liExpiry = li?.expiresAt ? Date.parse(li.expiresAt) : now.getTime();
     const refreshExpiry = Math.min(liExpiry, now.getTime() + MAX_REFRESH_DAYS * 86_400_000);
     const base = { clientId, familyId, scope, personUrn, revokedAt: null, createdAt: now.toISOString() };
     await this.core.db.createToken({ ...base, tokenHash: h(access), kind: 'access', expiresAt: new Date(now.getTime() + ttl * 60_000).toISOString() });
@@ -347,8 +353,37 @@ export class OAuthServer {
     if (!header?.startsWith('Bearer ')) return null;
     const t = await this.core.db.getToken(h(header.slice(7).trim()));
     if (!t || t.kind !== 'access' || t.revokedAt || t.expiresAt <= this.nowIso()) return null;
-    const owner = await this.core.db.getSetting('owner_person_urn');
-    return owner === t.personUrn ? t : null;
+    const user = await this.core.db.getUser(t.personUrn);
+    return user?.status === 'active' ? t : null;
+  }
+
+  /**
+   * Ponowne sprawdzenie uprawnień przy odświeżaniu tokenu konektora (co ok. godzinę): konto aktywne, ważne
+   * logowanie LinkedIn i nadal dozwolona rola na stronie. Zwraca powód odmowy albo null.
+   * Chwilowy błąd sieci po stronie LinkedIn nie odbiera dostępu (sprawdzimy przy kolejnym odświeżeniu).
+   */
+  private async reverify(personUrn: string): Promise<string | null> {
+    const now = this.nowIso();
+    const user = await this.core.db.getUser(personUrn);
+    if (!user || user.status !== 'active') return 'Konto nie ma dostępu do planera.';
+    const rec = await this.core.accounts.get(personUrn).catch(() => null);
+    if (!rec || rec.expiresAt <= now) return 'Logowanie LinkedIn wygasło - połącz konektor ponownie.';
+    try {
+      const identity = await fetchMemberIdentity(this.core.config, rec.accessToken, this.fetchImpl);
+      const access = resolveAccess(this.core.config, identity);
+      await this.core.accounts.setVerified(personUrn, 'active', access.roles, now);
+      return null;
+    } catch (e) {
+      if (e instanceof AccessDenied) {
+        await this.core.accounts.setVerified(personUrn, 'revoked', [], now);
+        await this.core.audit.record('oauth', 'access_revoked', 'rejected', personUrn, { reason: e.message });
+        this.log.warn('Odebrano dostęp: brak dozwolonej roli na stronie', { alert: 'access_revoked', personUrn });
+        return e.message;
+      }
+      if (e instanceof OAuthError && /odrzucił/.test(e.message)) return 'LinkedIn odrzucił logowanie - połącz konektor ponownie.';
+      this.log.warn('Nie udało się ponownie sprawdzić ról (pomijam)', { personUrn, error: e instanceof Error ? e.message : String(e) });
+      return null;
+    }
   }
 
   unauthorized(res: http.ServerResponse, description = 'Wymagane logowanie.'): void {

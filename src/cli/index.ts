@@ -42,7 +42,7 @@ const HELP = `Użycie: npm run cli -- <komenda>   (albo skróty npm run ... poda
   login                       adres strony logowania OAuth                                   (npm run login)
   token status                stan zapisanego tokenu (bez samego tokenu)                     (npm run token:status)
   token verify                sprawdź token wywołaniem userinfo (1 wywołanie API)
-  token import [--expires-in-days 60] [--scopes "openid profile w_member_social"]
+  token import [--expires-in-days 60] [--scopes "r_organization_admin w_organization_social"]
                               import tokenu z Developer Portal (Token Generator)            (npm run token:import)
   token clear                 usuń token z tego komputera (wylogowanie)
   linkedin delete-post <id> [--yes]
@@ -51,7 +51,8 @@ const HELP = `Użycie: npm run cli -- <komenda>   (albo skróty npm run ... poda
   pause [powód]               bezpiecznik: harmonogram niczego nie publikuje                 (npm run pause)
   resume                      wyłącz bezpiecznik                                             (npm run resume)
 
-  server status | pause [powód] | resume | owner-reset --yes
+  server status | pause [powód] | resume
+  server users list | block <osoba> | unblock <osoba> | remove <osoba> --yes
                               administracja wariantu server-http (wymaga DATABASE_URL)
 
   mock show | reset | posts

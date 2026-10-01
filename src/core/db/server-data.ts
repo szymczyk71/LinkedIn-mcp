@@ -64,6 +64,18 @@ export interface UploadTicketRow {
   expiresAt: string;
 }
 
+/** Administrator strony firmy, który połączył konektor (tabela org_users). */
+export interface OrgUser {
+  personUrn: string;
+  name: string | null;
+  roles: string[];
+  /** active - może korzystać; revoked - LinkedIn odebrał rolę; blocked - zablokowany komendą administracyjną. */
+  status: 'active' | 'revoked' | 'blocked';
+  firstLoginAt: string;
+  lastLoginAt: string;
+  lastVerifiedAt: string;
+}
+
 export interface ServerData {
   // obrazy
   putImage(img: StoredImage): Promise<void>;
@@ -97,6 +109,15 @@ export interface ServerData {
   /** Atomowo unieważnia token odświeżania; zwraca go, jeśli był ważny (rotacja). */
   consumeRefreshToken(tokenHash: string, nowUtc: string): Promise<OAuthToken | null>;
   revokeFamily(familyId: string, nowUtc: string): Promise<number>;
+  revokeTokensForPerson(personUrn: string, nowUtc: string): Promise<number>;
+
+  // użytkownicy (administratorzy strony)
+  /** Po udanym logowaniu: nowa osoba albo aktualizacja; zablokowana komendą pozostaje zablokowana. */
+  upsertUserLogin(u: { personUrn: string; name: string | null; roles: string[] }, nowUtc: string): Promise<OrgUser>;
+  getUser(personUrn: string): Promise<OrgUser | null>;
+  listUsers(): Promise<OrgUser[]>;
+  setUserStatus(personUrn: string, status: OrgUser['status'], roles: string[] | null, nowUtc: string): Promise<boolean>;
+  deleteUser(personUrn: string): Promise<boolean>;
   /** Unieważnia wszystkie tokeny konektora (np. po zmianie właściciela). */
   revokeAllTokens(nowUtc: string): Promise<number>;
   deleteExpiredServerData(nowUtc: string): Promise<number>;

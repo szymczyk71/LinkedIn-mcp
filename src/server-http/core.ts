@@ -1,11 +1,11 @@
 import { AuditLog } from '../core/audit.js';
 import { ConfigError, type Config } from '../core/config.js';
 import { PostgresStore } from '../core/db/pg-store.js';
-import { DbImageRepo, DbPause, DbSecret, DbUploadRegistry } from '../core/db/server-backends.js';
+import { DbAccounts, DbImageRepo, DbPause, DbUploadRegistry } from '../core/db/server-backends.js';
 import type { CoreContext } from '../core/index.js';
 import { createLinkedInClient } from '../core/linkedin/index.js';
 import type { LinkedInClient } from '../core/linkedin/client.js';
-import { EnvOrKeyringKeyProvider, TokenStore } from '../core/token-store.js';
+import { EnvOrKeyringKeyProvider } from '../core/token-store.js';
 import { systemClock, type Clock } from '../core/util.js';
 
 export interface ServerCore extends CoreContext {
@@ -27,6 +27,7 @@ export function requireServerConfig(config: Config): { databaseUrl: string; publ
   if (!config.http.publicBaseUrl) missing.push('PUBLIC_BASE_URL');
   if (!config.encKeyFromEnv) missing.push('LINKEDIN_MCP_ENC_KEY (w chmurze nie ma Menedżera poświadczeń Windows)');
   if (!config.linkedin.clientId || !config.linkedin.clientSecret) missing.push('LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET');
+  if (!config.linkedin.organizationId) missing.push('LINKEDIN_ORGANIZATION_ID (numer strony firmy)');
   if (missing.length) throw new ConfigError(`server-http wymaga ustawień: ${missing.join(', ')}.`);
   return { databaseUrl: config.http.databaseUrl!, publicBaseUrl: config.http.publicBaseUrl! };
 }
@@ -36,8 +37,8 @@ export async function openServerCore(config: Config, opts: ServerCoreOptions = {
   const { databaseUrl, publicBaseUrl } = requireServerConfig(config);
   const db = await PostgresStore.connect(databaseUrl, { schema: opts.pgSchema });
   const clock = opts.clock ?? systemClock;
-  const tokens = new TokenStore(new DbSecret(db, 'linkedin_token'), new EnvOrKeyringKeyProvider(config.encKeyFromEnv));
-  const linkedin = opts.linkedin ?? createLinkedInClient(config, tokens);
+  const accounts = new DbAccounts(db, new EnvOrKeyringKeyProvider(config.encKeyFromEnv));
+  const linkedin = opts.linkedin ?? createLinkedInClient(config, accounts);
   return {
     config,
     store: db,
@@ -49,7 +50,7 @@ export async function openServerCore(config: Config, opts: ServerCoreOptions = {
     clock,
     images: new DbImageRepo(db),
     pause: new DbPause(db),
-    tokens,
+    accounts,
     uploads: new DbUploadRegistry(db, publicBaseUrl),
   };
 }

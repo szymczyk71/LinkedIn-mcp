@@ -29,17 +29,37 @@ export async function serverCommand(config: Config, sub: string | undefined, arg
         await audit.record('cli', 'resume', 'ok', null, { target: 'server' });
         return { ...info, message: 'Bezpiecznik serwera wyłączony.' };
       }
-      case 'owner-reset': {
-        if (!args.includes('--yes')) {
-          return { reset: false, message: 'Reset odłącza właściciela, unieważnia tokeny konektora i usuwa token LinkedIn. Powtórz z --yes.' };
+      case 'users': {
+        const [action, who] = args;
+        const users = await db.listUsers();
+        if (!action || action === 'list') {
+          return {
+            users: users.map((u) => ({ name: u.name, person_urn: u.personUrn, roles: u.roles, status: u.status, last_login_at: u.lastLoginAt, last_verified_at: u.lastVerifiedAt })),
+          };
         }
+        const target = users.find((u) => u.personUrn === who || (who && u.name?.toLowerCase() === who.toLowerCase()));
+        if (!target) throw new Error(`Nie ma użytkownika "${who ?? ''}". Lista: npm run cli -- server users list`);
         const now = new Date().toISOString();
-        await db.setSetting('owner_person_urn', null, now);
-        const revoked = await db.revokeAllTokens(now);
-        await db.deleteSecret('linkedin_token');
-        await db.setAuthMeta('live', null);
-        await audit.record('cli', 'owner_reset', 'ok', null, { revoked });
-        return { reset: true, revokedTokens: revoked, message: 'Właściciel odłączony. Następne konto, które połączy konektor, zostanie właścicielem.' };
+        if (action === 'block') {
+          await db.setUserStatus(target.personUrn, 'blocked', null, now);
+          const revoked = await db.revokeTokensForPerson(target.personUrn, now);
+          await audit.record('cli', 'user_blocked', 'ok', target.personUrn, { revoked });
+          return { blocked: true, user: target.name ?? target.personUrn, revokedTokens: revoked, message: 'Konto zablokowane - konektor przestanie działać dla tej osoby, a jej token nie będzie używany do publikacji.' };
+        }
+        if (action === 'unblock') {
+          await db.setUserStatus(target.personUrn, 'revoked', null, now);
+          await audit.record('cli', 'user_unblocked', 'ok', target.personUrn, null);
+          return { unblocked: true, user: target.name ?? target.personUrn, message: 'Odblokowano. Osoba musi połączyć konektor ponownie (role zostaną sprawdzone w LinkedIn).' };
+        }
+        if (action === 'remove') {
+          if (!args.includes('--yes')) return { removed: false, message: 'Usunięcie kasuje konto i token tej osoby. Powtórz z --yes.' };
+          await db.revokeTokensForPerson(target.personUrn, now);
+          await db.deleteSecret(`linkedin_token:${target.personUrn}`);
+          await db.deleteUser(target.personUrn);
+          await audit.record('cli', 'user_removed', 'ok', target.personUrn, null);
+          return { removed: true, user: target.name ?? target.personUrn };
+        }
+        throw new Error('Użycie: server users list | block <osoba> | unblock <osoba> | remove <osoba> --yes');
       }
       case 'status':
       default: {
@@ -52,8 +72,9 @@ export async function serverCommand(config: Config, sub: string | undefined, arg
         }));
         const live = await db.getAuthMeta('live');
         return {
-          owner: await db.getSetting('owner_person_urn'),
-          linkedin_login: { present: Boolean(await db.getSecret('linkedin_token')), profile_name: live?.profileName ?? null, expires_at: live?.expiresAt ?? null, can_comment: live?.canComment ?? 'unknown' },
+          organization_urn: config.linkedin.organizationId ? `urn:li:organization:${config.linkedin.organizationId}` : null,
+          users: (await db.listUsers()).map((u) => ({ name: u.name ?? u.personUrn, roles: u.roles, status: u.status, last_login_at: u.lastLoginAt })),
+          can_comment: live?.canComment ?? 'unknown',
           pause: await pause.read(),
           posts: counts,
           next_scheduled: next,

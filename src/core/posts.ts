@@ -8,10 +8,20 @@ export function initialCommentStatus(p: Pick<PlannedPost, 'commentText' | 'linkM
 }
 
 /** Tworzy wiersz posta z pozycji zatwierdzanego planu. */
-export function newPostFromPlanned(p: PlannedPost, seriesId: string, mode: Post['mode']): NewPost {
+export function newPostFromPlanned(
+  p: PlannedPost,
+  seriesId: string,
+  mode: Post['mode'],
+  author: { personUrn: string; name: string | null } | null = null,
+): NewPost {
   return {
     ...p,
     mode,
+    createdBy: author?.personUrn ?? null,
+    createdByName: author?.name ?? null,
+    updatedBy: null,
+    updatedByName: null,
+    publishedBy: null,
     id: newId('post'),
     seriesId,
     status: 'scheduled',

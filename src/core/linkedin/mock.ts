@@ -97,11 +97,11 @@ export class MockLinkedIn implements LinkedInClient {
     }
     return {
       connected: true,
-      personUrn: 'urn:li:person:MOCK123',
-      profileName: this.opts.profileName ?? 'Szymon Warda (atrapa)',
-      profileUrl: 'https://www.linkedin.com/in/mock-profile',
+      personUrn: 'urn:li:organization:MOCK123',
+      profileName: this.opts.profileName ?? 'KTBnet (atrapa)',
+      profileUrl: 'https://www.linkedin.com/company/mock-page/',
       expiresAt: this.opts.expiresAt ?? new Date(Date.now() + 60 * 86_400_000).toISOString(),
-      scopes: s.auth === 'no_post_permission' ? ['openid', 'profile'] : ['openid', 'profile', 'w_member_social'],
+      scopes: s.auth === 'no_post_permission' ? ['r_organization_admin'] : ['r_organization_admin', 'w_organization_social'],
       canPost: s.auth !== 'no_post_permission',
     };
   }
@@ -112,7 +112,7 @@ export class MockLinkedIn implements LinkedInClient {
     const mode = this.takeMode('publish', s);
     await this.delay(s);
     if (s.auth === 'disconnected') throw new LinkedInError('unauthorized', 'Atrapa: brak połączenia z LinkedIn.', 401);
-    if (s.auth === 'no_post_permission') throw new LinkedInError('forbidden', 'Atrapa: brak uprawnienia w_member_social (403).', 403);
+    if (s.auth === 'no_post_permission') throw new LinkedInError('forbidden', 'Atrapa: brak uprawnienia w_organization_social (403).', 403);
     let imageUrn: string | null = null;
     if (input.image) {
       this.calls.uploadImage++;
@@ -140,7 +140,7 @@ export class MockLinkedIn implements LinkedInClient {
         throw new LinkedInError('ambiguous', 'Atrapa: zerwane połączenie po wysłaniu posta (502).', 502);
       default: {
         const p = this.createPost(input);
-        return { postUrn: p.urn, postUrl: mockPostUrl(p.urn) };
+        return { postUrn: p.urn, postUrl: mockPostUrl(p.urn), publishedBy: input.actAs ?? 'urn:li:person:MOCK_ADMIN' };
       }
     }
   }
@@ -166,7 +166,7 @@ export class MockLinkedIn implements LinkedInClient {
         this.createComment(post, input);
         throw new LinkedInError('ambiguous', 'Atrapa: zerwane połączenie po wysłaniu komentarza (502).', 502);
       default:
-        return { commentUrn: this.createComment(post, input) };
+        return { commentUrn: this.createComment(post, input), publishedBy: input.actAs ?? 'urn:li:person:MOCK_ADMIN' };
     }
   }
 

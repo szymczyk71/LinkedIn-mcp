@@ -14,8 +14,12 @@ export interface TokenRecord {
   expiresAt: string;
   refreshTokenExpiresAt: string | null;
   scopes: string[];
+  /** Osoba, która się zalogowała (administrator strony). */
   personUrn: string;
   profileName: string | null;
+  /** Strona firmy, w imieniu której publikujemy, i role tej osoby na niej (APPROVED). */
+  organizationUrn: string;
+  roles: string[];
   obtainedAt: string;
   source: 'oauth' | 'import';
 }
@@ -27,6 +31,8 @@ export interface TokenInfo {
   scopes: string[];
   personUrn: string | null;
   profileName: string | null;
+  organizationUrn: string | null;
+  roles: string[];
   obtainedAt: string | null;
   source: TokenRecord['source'] | null;
 }
@@ -137,6 +143,8 @@ export class TokenStore {
       scopes: r?.scopes ?? [],
       personUrn: r?.personUrn ?? null,
       profileName: r?.profileName ?? null,
+      organizationUrn: r?.organizationUrn ?? null,
+      roles: r?.roles ?? [],
       obtainedAt: r?.obtainedAt ?? null,
       source: r?.source ?? null,
     };
