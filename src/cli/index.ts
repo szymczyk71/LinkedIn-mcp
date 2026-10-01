@@ -285,10 +285,14 @@ function print(v: unknown): void {
   process.stdout.write(JSON.stringify(v, null, 2) + '\n');
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err: unknown) => {
-    process.stderr.write(`Błąd: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(1);
-  },
-);
+// Bez process.exit(): na Windows twarde wyjście w trakcie zamykania uchwytów (proces potomny workera,
+// połączenia fetch) kończy się asercją libuv. Ustawiamy kod i pozwalamy procesowi zakończyć się samemu;
+// zabezpieczenie: wyjście po 10 s, gdyby coś trzymało pętlę zdarzeń.
+const finish = (code: number) => {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 10_000).unref();
+};
+main(process.argv.slice(2)).then(finish, (err: unknown) => {
+  process.stderr.write(`Błąd: ${err instanceof Error ? err.message : String(err)}\n`);
+  finish(1);
+});
